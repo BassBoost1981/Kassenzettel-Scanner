@@ -50,6 +50,7 @@ pub fn run() {
             commands::receipts::get_receipt_detail,
             commands::receipts::delete_receipt,
             commands::receipts::search_receipts,
+            sidecar::get_app_dir_path,
             sidecar::get_sidecar_status,
             sidecar::get_hardware_info,
             sidecar::check_model_exists,

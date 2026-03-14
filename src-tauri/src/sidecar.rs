@@ -111,6 +111,14 @@ pub struct HardwareInfo {
     pub gpu_layers: i32,
 }
 
+/// Return the app directory (exe location) for resolving relative paths.
+/// Gibt das App-Verzeichnis (EXE-Speicherort) fuer relative Pfadaufloesung zurueck.
+#[tauri::command]
+pub fn get_app_dir_path() -> Result<String, String> {
+    let dir = get_app_dir()?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// Return the current sidecar status.
 /// Gibt den aktuellen Sidecar-Status zurueck.
 #[tauri::command]

@@ -189,7 +189,9 @@ pub async fn analyze_receipt(
             )
         })?;
 
-        saved_image_path = Some(file_path.to_string_lossy().to_string());
+        // Store relative path for portability / Relativen Pfad speichern fuer Portabilitaet
+        let relative_path = format!("data/images/{}", file_name);
+        saved_image_path = Some(relative_path);
     }
 
     // 5. POST to llama-server / POST an llama-server senden

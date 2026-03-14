@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useReceipts } from "@/hooks/useReceipts";
+import { getAppDirPath } from "@/lib/tauri-commands";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,11 +47,13 @@ export function ReceiptDetail() {
   const { currentDetail, detailLoading, fetchDetail, removeReceipt, clearDetail } = useReceipts();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
+  const [appDir, setAppDir] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) {
       fetchDetail(Number(id));
     }
+    getAppDirPath().then(setAppDir).catch(() => {});
     return () => clearDetail();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -98,10 +101,19 @@ export function ReceiptDetail() {
   const receipt = currentDetail;
   const subtotal = receipt.items.reduce((sum, item) => sum + item.total_price, 0);
 
-  // Convert Windows path to asset:// URL / Windows-Pfad in asset://-URL umwandeln
-  const imageUrl = receipt.image_path
-    ? `asset://localhost/${receipt.image_path.replace(/\\/g, "/")}`
-    : null;
+  // Resolve image path to asset:// URL / Bildpfad in asset://-URL aufloesen
+  // Supports both relative (data/images/x.jpg) and legacy absolute paths
+  // Unterstuetzt relative (data/images/x.jpg) und alte absolute Pfade
+  const imageUrl = (() => {
+    if (!receipt.image_path) return null;
+    const p = receipt.image_path.replace(/\\/g, "/");
+    // Absolute path (e.g. C:/... or E:/...) / Absoluter Pfad
+    if (/^[A-Za-z]:\//.test(p)) return `asset://localhost/${p}`;
+    // Relative path — resolve with app directory / Relativer Pfad — mit App-Verzeichnis aufloesen
+    if (!appDir) return null;
+    const base = appDir.replace(/\\/g, "/");
+    return `asset://localhost/${base}/${p}`;
+  })();
 
   return (
     <div className="space-y-6">

@@ -64,6 +64,10 @@ export const scanDocument = () =>
 export const isScannerAvailable = () =>
   invoke<boolean>("is_scanner_available");
 
+// App directory / App-Verzeichnis
+export const getAppDirPath = () =>
+  invoke<string>("get_app_dir_path");
+
 // Sidecar (LLM server)
 export const getSidecarStatus = () =>
   invoke<unknown>("get_sidecar_status");

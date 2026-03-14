@@ -51,6 +51,7 @@ pub fn run() {
             commands::receipts::delete_receipt,
             commands::receipts::search_receipts,
             sidecar::get_sidecar_status,
+            sidecar::get_hardware_info,
             sidecar::check_model_exists,
             sidecar::start_llama_server,
             sidecar::stop_llama_server,

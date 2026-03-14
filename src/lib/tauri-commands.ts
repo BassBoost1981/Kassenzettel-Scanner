@@ -83,6 +83,9 @@ export const downloadModel = () =>
 export const selectModelFile = () =>
   invoke<string>("select_model_file");
 
+export const getHardwareInfo = () =>
+  invoke<{ accelType: string; gpuLayers: number }>("get_hardware_info");
+
 // Export / Export
 export const exportReceiptsCsv = (path: string, filter?: ReceiptFilter) =>
   invoke<void>("export_receipts_csv", { path, filter: filter ?? null });

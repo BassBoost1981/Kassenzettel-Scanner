@@ -7,6 +7,7 @@ import {
   checkModelExists,
   downloadModel,
   selectModelFile,
+  getHardwareInfo,
 } from "../lib/tauri-commands";
 
 export type SidecarStatus =
@@ -48,17 +49,24 @@ function normalizeSidecarStatus(raw: unknown): {
   }
 }
 
+interface HardwareInfo {
+  accelType: string;
+  gpuLayers: number;
+}
+
 interface SidecarState {
   status: SidecarStatus;
   modelExists: boolean;
   polling: boolean;
   error: string | null;
+  hardwareInfo: HardwareInfo | null;
   fetchStatus: () => Promise<void>;
   startServer: () => Promise<void>;
   stopServer: () => Promise<void>;
   checkModel: () => Promise<boolean>;
   downloadModelFile: () => Promise<void>;
   selectModel: () => Promise<string>;
+  fetchHardwareInfo: () => Promise<void>;
   startPolling: () => void;
   stopPolling: () => void;
 }
@@ -70,12 +78,17 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
   modelExists: false,
   polling: false,
   error: null,
+  hardwareInfo: null,
 
   fetchStatus: async () => {
     try {
       const raw = await getSidecarStatus();
       const normalized = normalizeSidecarStatus(raw);
       set({ status: normalized.status, error: normalized.error });
+      // Fetch hardware info when server is running / Hardware-Info abrufen wenn Server laeuft
+      if (normalized.status === "running") {
+        get().fetchHardwareInfo();
+      }
     } catch (err) {
       set({ status: "error", error: String(err) });
     }
@@ -119,6 +132,15 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
     const path = await selectModelFile();
     set({ modelExists: true });
     return path;
+  },
+
+  fetchHardwareInfo: async () => {
+    try {
+      const info = await getHardwareInfo();
+      set({ hardwareInfo: info });
+    } catch {
+      // Hardware info not available / Hardware-Info nicht verfuegbar
+    }
   },
 
   startPolling: () => {

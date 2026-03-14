@@ -100,11 +100,86 @@ fn model_files_exist(model_path: &PathBuf, mmproj_path: &PathBuf) -> bool {
 // Tauri commands / Tauri-Befehle
 // ---------------------------------------------------------------------------
 
+/// Hardware acceleration info for the AI model.
+/// Hardware-Beschleunigungsinformation fuer das KI-Modell.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareInfo {
+    /// "GPU (Vulkan)", "CPU", or "iGPU" / Beschleunigungstyp
+    pub accel_type: String,
+    /// Number of GPU layers used / Anzahl genutzter GPU-Layer
+    pub gpu_layers: i32,
+}
+
 /// Return the current sidecar status.
 /// Gibt den aktuellen Sidecar-Status zurueck.
 #[tauri::command]
 pub fn get_sidecar_status(state: State<'_, SidecarState>) -> Result<SidecarStatus, String> {
     Ok(state.status.lock().map_err(|e| e.to_string())?.clone())
+}
+
+/// Detect which hardware the AI is running on (GPU, iGPU, CPU).
+/// Erkennt auf welcher Hardware die KI laeuft (GPU, iGPU, CPU).
+#[tauri::command]
+pub async fn get_hardware_info(app: AppHandle) -> Result<HardwareInfo, String> {
+    // Read gpu_layers setting from DB / GPU-Layer-Einstellung aus DB lesen
+    let gpu_layers_str: String = {
+        let db = app.state::<crate::db::Database>();
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = 'gpu_layers'")
+            .map_err(|e| e.to_string())?;
+        use rusqlite::OptionalExtension;
+        stmt.query_row([], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "-1".to_string())
+    };
+
+    let gpu_layers: i32 = gpu_layers_str.parse().unwrap_or(-1);
+
+    // If server is running, try to get actual info from /props endpoint
+    // Falls Server laeuft, versuche Info vom /props-Endpoint zu holen
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    if let Ok(resp) = client.get("http://127.0.0.1:8190/props").send().await {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                // llama-server /props returns total_slots, n_gpu_layers etc.
+                let actual_layers = json
+                    .get("n_gpu_layers")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(gpu_layers as i64) as i32;
+
+                let accel_type = classify_accel(actual_layers);
+                return Ok(HardwareInfo {
+                    accel_type,
+                    gpu_layers: actual_layers,
+                });
+            }
+        }
+    }
+
+    // Fallback: derive from settings / Fallback: aus Einstellungen ableiten
+    let accel_type = classify_accel(gpu_layers);
+    Ok(HardwareInfo {
+        accel_type,
+        gpu_layers,
+    })
+}
+
+/// Classify the acceleration type based on GPU layer count.
+/// Klassifiziert den Beschleunigungstyp anhand der GPU-Layer-Anzahl.
+fn classify_accel(gpu_layers: i32) -> String {
+    match gpu_layers {
+        0 => "CPU".to_string(),
+        -1 => "GPU (Auto)".to_string(),
+        1..=8 => "iGPU".to_string(),
+        _ => format!("GPU (Vulkan, {} Layer)", gpu_layers),
+    }
 }
 
 /// Check whether the model file exists on disk.

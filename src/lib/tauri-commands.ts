@@ -1,6 +1,7 @@
 // Typed Tauri command wrappers / Typisierte Tauri-Befehl-Wrapper
 import { invoke } from "@tauri-apps/api/core";
 import type { Receipt, ReceiptDetail, ReceiptFilter, NewReceipt, AnalysisResult } from "../types/receipt";
+import type { Category } from "@/types/category";
 import type { Store } from "../types/store";
 
 // Settings / Einstellungen
@@ -25,6 +26,16 @@ export const updateStore = (id: number, name: string, mergeVariants: boolean) =>
 
 export const deleteStore = (id: number) =>
   invoke<void>("delete_store", { id });
+
+// Categories / Kategorien
+export const getCategories = () =>
+  invoke<Category[]>("get_categories");
+
+export const createCategory = (name: string) =>
+  invoke<Category>("create_category", { name });
+
+export const deleteCategory = (id: number) =>
+  invoke<void>("delete_category", { id });
 
 // Receipts / Kassenzettel
 export const getReceipts = (filter?: ReceiptFilter) =>
@@ -55,7 +66,7 @@ export const isScannerAvailable = () =>
 
 // Sidecar (LLM server)
 export const getSidecarStatus = () =>
-  invoke<string>("get_sidecar_status");
+  invoke<unknown>("get_sidecar_status");
 
 export const startLlamaServer = () =>
   invoke<void>("start_llama_server");
@@ -75,3 +86,7 @@ export const selectModelFile = () =>
 // Export / Export
 export const exportReceiptsCsv = (path: string, filter?: ReceiptFilter) =>
   invoke<void>("export_receipts_csv", { path, filter: filter ?? null });
+
+// Mock data / Testdaten
+export const insertMockData = () => invoke<string>("insert_mock_data");
+export const deleteAllReceipts = () => invoke<string>("delete_all_receipts");

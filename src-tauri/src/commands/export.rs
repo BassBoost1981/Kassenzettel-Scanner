@@ -75,8 +75,7 @@ pub fn export_receipts_csv(
     sql.push_str(" ORDER BY r.date DESC, r.id DESC");
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let receipts: Vec<(i64, String, String)> = stmt
         .query_map(param_refs.as_slice(), |row| {
@@ -96,8 +95,7 @@ pub fn export_receipts_csv(
 
     // Write UTF-8 BOM so Excel opens the file correctly
     // UTF-8 BOM schreiben damit Excel die Datei korrekt oeffnet
-    file.write_all(b"\xEF\xBB\xBF")
-        .map_err(|e| e.to_string())?;
+    file.write_all(b"\xEF\xBB\xBF").map_err(|e| e.to_string())?;
 
     // Write header / Kopfzeile schreiben
     writeln!(

@@ -1,13 +1,15 @@
 // Collapsible sidebar navigation / Einklappbare Seitenleisten-Navigation
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { ScanLine, ClipboardList, Settings, PanelLeftClose, PanelLeft } from "lucide-react";
+import { ScanLine, ClipboardList, TrendingUp, LayoutDashboard, Settings, PanelLeftClose, PanelLeft } from "lucide-react";
 import { useSettingsStore } from "@/store/settingsStore";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { path: "/scan", label: "Scan", icon: ScanLine },
   { path: "/receipts", label: "Bons", icon: ClipboardList },
+  { path: "/prices", label: "Preisverlauf", icon: TrendingUp },
+  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/settings", label: "Einstellungen", icon: Settings },
 ];
 

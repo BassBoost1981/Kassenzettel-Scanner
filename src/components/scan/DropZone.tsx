@@ -11,7 +11,7 @@ interface DropZoneProps {
   onImageSelected: (path: string) => void;
 }
 
-const SUPPORTED_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "heic"];
+const SUPPORTED_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif"];
 
 function isValidImageFile(path: string): boolean {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";

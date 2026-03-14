@@ -266,8 +266,7 @@ export function ReceiptList() {
                     {formatCurrency(receipt.total_amount)}
                   </TableCell>
                   <TableCell className="text-center">
-                    {/* Item count not available in list view */}
-                    —
+                    {receipt.item_count ?? "—"}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button

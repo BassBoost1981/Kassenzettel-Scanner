@@ -1,5 +1,5 @@
 // Onboarding model download overlay / Onboarding-Modell-Download-Overlay
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { downloadModel, selectModelFile, startLlamaServer } from "@/lib/tauri-commands";
 import { Button } from "@/components/ui/button";
@@ -22,8 +22,8 @@ import {
 interface DownloadProgress {
   downloaded: number;
   total: number;
-  speed: number;
-  percentage: number;
+  percent: number;
+  fileName?: string;
 }
 
 interface ModelDownloadProps {
@@ -43,10 +43,11 @@ export function ModelDownload({ onComplete }: ModelDownloadProps) {
   const [progress, setProgress] = useState<DownloadProgress>({
     downloaded: 0,
     total: 0,
-    speed: 0,
-    percentage: 0,
+    percent: 0,
   });
+  const [speed, setSpeed] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
+  const lastProgressRef = useRef<{ downloaded: number; timestamp: number; fileName?: string } | null>(null);
 
   // Listen to download progress events / Download-Fortschrittsereignisse abonnieren
   useEffect(() => {
@@ -54,15 +55,33 @@ export function ModelDownload({ onComplete }: ModelDownloadProps) {
 
     listen<DownloadProgress>("model-download-progress", (event) => {
       setProgress(event.payload);
-      if (event.payload.percentage >= 100) {
-        setState("complete");
+
+      const now = Date.now();
+      const lastProgress = lastProgressRef.current;
+      const fileChanged = lastProgress?.fileName !== event.payload.fileName;
+
+      if (!lastProgress || fileChanged || event.payload.downloaded < lastProgress.downloaded) {
+        setSpeed(0);
+      } else {
+        const elapsedMs = now - lastProgress.timestamp;
+        const downloadedDelta = event.payload.downloaded - lastProgress.downloaded;
+        if (elapsedMs > 0 && downloadedDelta >= 0) {
+          setSpeed((downloadedDelta * 1000) / elapsedMs);
+        }
       }
+
+      lastProgressRef.current = {
+        downloaded: event.payload.downloaded,
+        timestamp: now,
+        fileName: event.payload.fileName,
+      };
     }).then((fn) => {
       unlisten = fn;
     });
 
     return () => {
       unlisten?.();
+      lastProgressRef.current = null;
     };
   }, []);
 
@@ -82,8 +101,12 @@ export function ModelDownload({ onComplete }: ModelDownloadProps) {
     try {
       await selectModelFile();
       setState("complete");
-    } catch {
-      // User cancelled / Benutzer hat abgebrochen
+    } catch (err) {
+      if (String(err).includes("Keine Datei ausgewaehlt") || String(err).includes("No file selected")) {
+        return;
+      }
+      setState("error");
+      setErrorMsg(String(err));
     }
   };
 
@@ -99,7 +122,9 @@ export function ModelDownload({ onComplete }: ModelDownloadProps) {
   const handleRetry = () => {
     setState("idle");
     setErrorMsg("");
-    setProgress({ downloaded: 0, total: 0, speed: 0, percentage: 0 });
+    setProgress({ downloaded: 0, total: 0, percent: 0 });
+    setSpeed(0);
+    lastProgressRef.current = null;
   };
 
   return (
@@ -145,22 +170,24 @@ export function ModelDownload({ onComplete }: ModelDownloadProps) {
               {/* Progress bar / Fortschrittsbalken */}
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Herunterladen...</span>
+                  <span className="text-muted-foreground">
+                    {progress.fileName ? `${progress.fileName} wird geladen...` : "Herunterladen..."}
+                  </span>
                   <span className="font-medium">
-                    {Math.round(progress.percentage)}%
+                    {Math.round(progress.percent)}%
                   </span>
                 </div>
                 <div className="h-3 rounded-full bg-muted overflow-hidden">
                   <div
                     className="h-full rounded-full bg-primary transition-all duration-300"
-                    style={{ width: `${Math.min(progress.percentage, 100)}%` }}
+                    style={{ width: `${Math.min(progress.percent, 100)}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>
                     {formatBytes(progress.downloaded)} / {formatBytes(progress.total)}
                   </span>
-                  <span>{formatBytes(progress.speed)}/s</span>
+                  <span>{speed > 0 ? `${formatBytes(speed)}/s` : "…"}</span>
                 </div>
               </div>
 

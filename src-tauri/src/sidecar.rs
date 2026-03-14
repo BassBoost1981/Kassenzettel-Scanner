@@ -5,7 +5,6 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_shell::ShellExt;
 
 // ---------------------------------------------------------------------------
 // State & types / Zustand & Typen
@@ -25,10 +24,12 @@ pub enum SidecarStatus {
 /// Progress information emitted during model download.
 /// Fortschrittsinformation waehrend des Modell-Downloads.
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
     pub percent: f64,
+    pub file_name: String,
 }
 
 /// Managed Tauri state that holds sidecar status and child handle.
@@ -36,7 +37,7 @@ pub struct DownloadProgress {
 pub struct SidecarState {
     pub status: Mutex<SidecarStatus>,
     pub model_path: Mutex<Option<String>>,
-    pub child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
+    pub child: Mutex<Option<std::process::Child>>,
 }
 
 impl SidecarState {
@@ -69,13 +70,31 @@ fn get_model_dir() -> PathBuf {
     get_app_dir().join("data").join("models")
 }
 
-/// Default model filename.
-/// Standard-Modelldateiname.
-const MODEL_FILENAME: &str = "qwen2.5-vl-3b-instruct-q4_k_m.gguf";
+/// Get the llama binary directory (contains llama-server.exe + DLLs).
+/// Gibt das llama-Binary-Verzeichnis zurueck (enthält llama-server.exe + DLLs).
+fn get_llama_dir() -> PathBuf {
+    get_app_dir().join("llama")
+}
 
-/// Placeholder download URL for the model.
-/// Platzhalter-Download-URL fuer das Modell.
-const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/qwen2.5-vl-3b-instruct-q4_k_m.gguf";
+/// Default model filename / Standard-Modelldateiname
+const MODEL_FILENAME: &str = "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf";
+const MMPROJ_FILENAME: &str = "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf";
+
+/// Download URL for the model / Download-URL fuer das Modell
+const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf";
+const MMPROJ_DOWNLOAD_URL: &str = "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf";
+
+fn default_model_path() -> PathBuf {
+    get_model_dir().join(MODEL_FILENAME)
+}
+
+fn default_mmproj_path() -> PathBuf {
+    get_model_dir().join(MMPROJ_FILENAME)
+}
+
+fn model_files_exist(model_path: &PathBuf, mmproj_path: &PathBuf) -> bool {
+    model_path.exists() && mmproj_path.exists()
+}
 
 // ---------------------------------------------------------------------------
 // Tauri commands / Tauri-Befehle
@@ -88,11 +107,11 @@ pub fn get_sidecar_status(state: State<'_, SidecarState>) -> SidecarStatus {
     state.status.lock().unwrap().clone()
 }
 
-/// Check whether the default model file exists on disk.
-/// Prueft, ob die Standard-Modelldatei auf der Festplatte existiert.
+/// Check whether the model file exists on disk.
+/// Prueft, ob die Modelldatei auf der Festplatte existiert.
 #[tauri::command]
 pub fn check_model_exists() -> bool {
-    get_model_dir().join(MODEL_FILENAME).exists()
+    model_files_exist(&default_model_path(), &default_mmproj_path())
 }
 
 /// Start the llama-server sidecar process.
@@ -107,14 +126,15 @@ pub async fn start_llama_server(
         let mp = state.model_path.lock().map_err(|e| e.to_string())?;
         match mp.clone() {
             Some(p) => PathBuf::from(p),
-            None => get_model_dir().join(MODEL_FILENAME),
+            None => default_model_path(),
         }
     };
+    let mmproj_path = default_mmproj_path();
 
-    if !model_path.exists() {
+    if !model_files_exist(&model_path, &mmproj_path) {
         let mut s = state.status.lock().map_err(|e| e.to_string())?;
         *s = SidecarStatus::ModelMissing;
-        return Err("Model file not found / Modelldatei nicht gefunden".into());
+        return Err("Model files not found / Modelldateien nicht gefunden".into());
     }
 
     // Read GPU layers from settings (default -1 = auto)
@@ -143,25 +163,53 @@ pub async fn start_llama_server(
         .ok_or("Invalid model path / Ungueltiger Modellpfad")?
         .to_string();
 
-    // Spawn sidecar / Sidecar starten
-    let sidecar_command = app
-        .shell()
-        .sidecar("llama-server")
-        .map_err(|e| format!("Failed to create sidecar command / Sidecar-Befehl fehlgeschlagen: {e}"))?
-        .args([
-            "--model",
-            &model_str,
-            "--port",
-            "8190",
-            "--host",
-            "127.0.0.1",
-            "--n-gpu-layers",
-            &gpu_layers,
-        ]);
+    // Spawn llama-server as a regular process from the llama/ directory
+    // llama-server als normalen Prozess aus dem llama/-Verzeichnis starten
+    let llama_dir = get_llama_dir();
+    let llama_exe = llama_dir.join("llama-server.exe");
 
-    let (mut rx, child) = sidecar_command
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sidecar / Sidecar konnte nicht gestartet werden: {e}"))?;
+    if !llama_exe.exists() {
+        let mut s = state.status.lock().map_err(|e| e.to_string())?;
+        *s = SidecarStatus::Error("llama-server.exe not found in llama/ folder / llama-server.exe nicht im llama/-Ordner gefunden".into());
+        return Err(format!(
+            "llama-server.exe not found at {} — copy all files from the llama.cpp Vulkan build into the llama/ folder next to the app",
+            llama_exe.display()
+        ));
+    }
+
+    let mut args = vec![
+        "--model".to_string(),
+        model_str.clone(),
+        "--port".to_string(),
+        "8190".to_string(),
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
+        "--n-gpu-layers".to_string(),
+        gpu_layers.clone(),
+    ];
+
+    // Add mmproj if found / mmproj hinzufuegen falls vorhanden
+    if mmproj_path.exists() {
+        args.push("--mmproj".to_string());
+        args.push(mmproj_path.to_str().unwrap_or_default().to_string());
+    }
+
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+
+    let mut cmd = std::process::Command::new(&llama_exe);
+    cmd.current_dir(&llama_dir) // DLLs are found via working directory
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    // Hide console window on Windows / Konsolenfenster auf Windows verstecken
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let child = cmd.spawn().map_err(|e| {
+        format!("Failed to spawn llama-server / llama-server konnte nicht gestartet werden: {e}")
+    })?;
 
     // Store child handle / Kind-Handle speichern
     {
@@ -169,49 +217,18 @@ pub async fn start_llama_server(
         *c = Some(child);
     }
 
-    // Spawn background task to consume sidecar stdout/stderr
-    // Hintergrund-Task zum Lesen von stdout/stderr starten
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        use tauri_plugin_shell::process::CommandEvent;
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) => {
-                    let text = String::from_utf8_lossy(&line);
-                    log::info!("[llama-server stdout] {}", text);
-                }
-                CommandEvent::Stderr(line) => {
-                    let text = String::from_utf8_lossy(&line);
-                    log::warn!("[llama-server stderr] {}", text);
-                }
-                CommandEvent::Terminated(payload) => {
-                    log::info!("[llama-server] terminated: {:?}", payload);
-                    let ss = app_handle.state::<SidecarState>();
-                    if let Ok(mut s) = ss.status.lock() {
-                        *s = SidecarStatus::Stopped;
-                    }
-                    break;
-                }
-                CommandEvent::Error(err) => {
-                    log::error!("[llama-server] error: {}", err);
-                }
-                _ => {}
-            }
-        }
-    });
-
     // Poll health endpoint for up to 30 seconds
     // Health-Endpunkt bis zu 30 Sekunden lang abfragen
     let client = reqwest::Client::new();
     let health_url = "http://127.0.0.1:8190/health";
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(30);
+    let timeout = std::time::Duration::from_secs(60);
 
     loop {
         if start.elapsed() > timeout {
             let mut s = state.status.lock().map_err(|e| e.to_string())?;
             *s = SidecarStatus::Error(
-                "Server did not become ready within 30s / Server wurde nicht innerhalb von 30s bereit"
+                "Server did not become ready within 60s / Server wurde nicht innerhalb von 60s bereit"
                     .into(),
             );
             return Err(
@@ -238,10 +255,19 @@ pub async fn start_llama_server(
 #[tauri::command]
 pub fn stop_llama_server(state: State<'_, SidecarState>) -> Result<(), String> {
     let mut child_guard = state.child.lock().map_err(|e| e.to_string())?;
-    if let Some(child) = child_guard.take() {
-        child
-            .kill()
-            .map_err(|e| format!("Failed to kill sidecar / Sidecar konnte nicht beendet werden: {e}"))?;
+    if let Some(mut child) = child_guard.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    // Fallback: kill any remaining llama-server process by name
+    // Fallback: verbliebene llama-server Prozesse per Name beenden
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["//f", "//im", "llama-server.exe"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
     let mut s = state.status.lock().map_err(|e| e.to_string())?;
     *s = SidecarStatus::Stopped;
@@ -251,32 +277,61 @@ pub fn stop_llama_server(state: State<'_, SidecarState>) -> Result<(), String> {
 /// Download the default model from Hugging Face with progress events.
 /// Laedt das Standard-Modell von Hugging Face mit Fortschritts-Events herunter.
 #[tauri::command]
-pub async fn download_model(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+pub async fn download_model(app: AppHandle, state: State<'_, SidecarState>) -> Result<(), String> {
+    let model_dir = get_model_dir();
+    std::fs::create_dir_all(&model_dir).map_err(|e| {
+        format!("Failed to create model dir / Modellverzeichnis konnte nicht erstellt werden: {e}")
+    })?;
+
+    let client = reqwest::Client::new();
+    download_model_file(
+        &app,
+        &client,
+        MODEL_DOWNLOAD_URL,
+        &default_model_path(),
+        "Basis-Modell",
+    )
+    .await?;
+    download_model_file(
+        &app,
+        &client,
+        MMPROJ_DOWNLOAD_URL,
+        &default_mmproj_path(),
+        "Vision-Projektor",
+    )
+    .await?;
+
+    // Update model path in state / Modellpfad im State aktualisieren
+    {
+        let mut mp = state.model_path.lock().map_err(|e| e.to_string())?;
+        *mp = Some(
+            default_model_path()
+                .to_str()
+                .unwrap_or_default()
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+async fn download_model_file(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    url: &str,
+    file_path: &PathBuf,
+    file_name: &str,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let model_dir = get_model_dir();
-    std::fs::create_dir_all(&model_dir)
-        .map_err(|e| format!("Failed to create model dir / Modellverzeichnis konnte nicht erstellt werden: {e}"))?;
-
-    let file_path = model_dir.join(MODEL_FILENAME);
-
-    // Check for existing partial download (resume support)
-    // Pruefen auf bestehenden Teil-Download (Fortsetzung)
     let existing_len = if file_path.exists() {
-        std::fs::metadata(&file_path)
-            .map(|m| m.len())
-            .unwrap_or(0)
+        std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0)
     } else {
         0
     };
 
-    let client = reqwest::Client::new();
-    let mut request = client.get(MODEL_DOWNLOAD_URL);
-
+    let mut request = client.get(url);
     if existing_len > 0 {
         request = request.header("Range", format!("bytes={}-", existing_len));
     }
@@ -294,7 +349,6 @@ pub async fn download_model(
         ));
     }
 
-    // Determine total size / Gesamtgroesse ermitteln
     let content_length = response.content_length().unwrap_or(0);
     let total = if response.status().as_u16() == 206 {
         existing_len + content_length
@@ -308,18 +362,16 @@ pub async fn download_model(
         0
     };
 
-    // Open file for writing (append if resuming)
-    // Datei zum Schreiben oeffnen (anhaengen bei Fortsetzung)
     let file = if response.status().as_u16() == 206 {
         tokio::fs::OpenOptions::new()
             .append(true)
-            .open(&file_path)
+            .open(file_path)
             .await
             .map_err(|e| format!("Failed to open file for append / Datei konnte nicht zum Anhaengen geoeffnet werden: {e}"))?
     } else {
-        tokio::fs::File::create(&file_path)
-            .await
-            .map_err(|e| format!("Failed to create file / Datei konnte nicht erstellt werden: {e}"))?
+        tokio::fs::File::create(file_path).await.map_err(|e| {
+            format!("Failed to create file / Datei konnte nicht erstellt werden: {e}")
+        })?
     };
 
     let mut writer = tokio::io::BufWriter::new(file);
@@ -346,6 +398,7 @@ pub async fn download_model(
                 downloaded,
                 total,
                 percent,
+                file_name: file_name.to_string(),
             },
         );
     }
@@ -354,17 +407,6 @@ pub async fn download_model(
         .flush()
         .await
         .map_err(|e| format!("Flush error / Flush-Fehler: {e}"))?;
-
-    // Update model path in state / Modellpfad im State aktualisieren
-    {
-        let mut mp = state.model_path.lock().map_err(|e| e.to_string())?;
-        *mp = Some(
-            file_path
-                .to_str()
-                .unwrap_or_default()
-                .to_string(),
-        );
-    }
 
     Ok(())
 }
@@ -388,30 +430,57 @@ pub async fn select_model_file(
     let source_pathbuf = selected
         .into_path()
         .map_err(|e| format!("Invalid file path / Ungueltiger Dateipfad: {e}"))?;
-    let source_path = source_pathbuf
-        .to_str()
-        .ok_or("Invalid file path encoding / Ungueltige Dateipfad-Kodierung")?
-        .to_string();
 
     let model_dir = get_model_dir();
-    std::fs::create_dir_all(&model_dir)
-        .map_err(|e| format!("Failed to create model dir / Modellverzeichnis konnte nicht erstellt werden: {e}"))?;
+    std::fs::create_dir_all(&model_dir).map_err(|e| {
+        format!("Failed to create model dir / Modellverzeichnis konnte nicht erstellt werden: {e}")
+    })?;
 
-    let file_name = std::path::Path::new(&source_path)
+    let file_name = source_pathbuf
         .file_name()
         .ok_or("Invalid file name / Ungueltiger Dateiname")?
         .to_str()
         .ok_or("Invalid file name encoding / Ungueltige Dateinamen-Kodierung")?
         .to_string();
 
-    let dest_path = model_dir.join(&file_name);
+    let source_dir = source_pathbuf
+        .parent()
+        .ok_or("Invalid source directory / Ungueltiges Quellverzeichnis")?;
+
+    let (selected_dest, sibling_source, sibling_dest) =
+        if file_name.eq_ignore_ascii_case(MMPROJ_FILENAME) {
+            (
+                default_mmproj_path(),
+                source_dir.join(MODEL_FILENAME),
+                default_model_path(),
+            )
+        } else {
+            (
+                default_model_path(),
+                source_dir.join(MMPROJ_FILENAME),
+                default_mmproj_path(),
+            )
+        };
 
     // Copy file to model directory / Datei in Modellverzeichnis kopieren
-    std::fs::copy(&source_path, &dest_path).map_err(|e| {
+    std::fs::copy(&source_pathbuf, &selected_dest).map_err(|e| {
         format!("Failed to copy model file / Modelldatei konnte nicht kopiert werden: {e}")
     })?;
 
-    let dest_str = dest_path
+    if sibling_source.exists() {
+        std::fs::copy(&sibling_source, &sibling_dest).map_err(|e| {
+            format!("Failed to copy mmproj file / mmproj-Datei konnte nicht kopiert werden: {e}")
+        })?;
+    }
+
+    if !model_files_exist(&default_model_path(), &default_mmproj_path()) {
+        return Err(
+            "Both model files are required. Please choose a file from a folder that contains the base model and the matching mmproj file / Es werden beide Modelldateien benötigt. Bitte wähle eine Datei aus einem Ordner, der das Basismodell und die passende mmproj-Datei enthält."
+                .into(),
+        );
+    }
+
+    let dest_str = default_model_path()
         .to_str()
         .ok_or("Invalid destination path / Ungueltiger Zielpfad")?
         .to_string();

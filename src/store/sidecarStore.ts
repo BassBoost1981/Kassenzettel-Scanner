@@ -9,7 +9,44 @@ import {
   selectModelFile,
 } from "../lib/tauri-commands";
 
-export type SidecarStatus = "stopped" | "starting" | "running" | "error" | "unknown";
+export type SidecarStatus =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "error"
+  | "model-missing"
+  | "unknown";
+
+function normalizeSidecarStatus(raw: unknown): {
+  status: SidecarStatus;
+  error: string | null;
+} {
+  if (raw && typeof raw === "object" && "Error" in raw) {
+    return {
+      status: "error",
+      error: String((raw as { Error?: unknown }).Error ?? "Unbekannter Fehler"),
+    };
+  }
+
+  switch (raw) {
+    case "Ready":
+    case "running":
+      return { status: "running", error: null };
+    case "Starting":
+    case "starting":
+      return { status: "starting", error: null };
+    case "Stopped":
+    case "stopped":
+      return { status: "stopped", error: null };
+    case "ModelMissing":
+      return { status: "model-missing", error: null };
+    case "Error":
+    case "error":
+      return { status: "error", error: null };
+    default:
+      return { status: "unknown", error: null };
+  }
+}
 
 interface SidecarState {
   status: SidecarStatus;
@@ -37,7 +74,8 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
   fetchStatus: async () => {
     try {
       const raw = await getSidecarStatus();
-      set({ status: raw as SidecarStatus, error: null });
+      const normalized = normalizeSidecarStatus(raw);
+      set({ status: normalized.status, error: normalized.error });
     } catch (err) {
       set({ status: "error", error: String(err) });
     }

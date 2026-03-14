@@ -23,8 +23,9 @@ Regeln:
 - Rabatte und Pfand separat ausweisen
 - Kategorie aus: Obst/Gemüse, Milchprodukte, Fleisch/Wurst, Backwaren, Getränke, Tiefkühl, Drogerie, Sonstiges
 - confidence: 1.0 wenn sicher, 0.5 wenn unsicher, 0.0 wenn geraten
+- Artikelnummer (EAN, PZN oder interne Nummer) wenn vorhanden extrahieren, sonst null
 
-Schema: { "markt": "...", "datum": "YYYY-MM-DD", "uhrzeit": "HH:MM", "artikel": [{"name": "...", "menge": 1, "einzelpreis": 0.00, "gesamtpreis": 0.00, "rabatt": 0.00, "pfand": 0.00, "kategorie": "...", "confidence": 1.0}], "gesamtbetrag": 0.00, "rabatte_gesamt": 0.00, "pfand_gesamt": 0.00, "zahlungsart": "..." }"#;
+Schema: { "markt": "...", "datum": "YYYY-MM-DD", "uhrzeit": "HH:MM", "artikel": [{"name": "...", "artikelnummer": "06197481", "menge": 1, "einzelpreis": 0.00, "gesamtpreis": 0.00, "rabatt": 0.00, "pfand": 0.00, "kategorie": "...", "confidence": 1.0}], "gesamtbetrag": 0.00, "rabatte_gesamt": 0.00, "pfand_gesamt": 0.00, "zahlungsart": "..." }"#;
 
 /// Result of AI receipt analysis / Ergebnis der KI-Kassenzettel-Analyse
 #[derive(Serialize, Deserialize, Clone)]
@@ -45,6 +46,8 @@ pub struct AnalysisResult {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AnalyzedItem {
     pub name: String,
+    #[serde(default)]
+    pub artikelnummer: Option<String>,
     pub menge: f64,
     pub einzelpreis: f64,
     pub gesamtpreis: f64,
@@ -83,8 +86,12 @@ fn get_app_dir() -> PathBuf {
 /// Ensure images directory exists / Sicherstellen dass Bilderverzeichnis existiert
 fn ensure_images_dir() -> Result<PathBuf, String> {
     let images_dir = get_app_dir().join("data").join("images");
-    std::fs::create_dir_all(&images_dir)
-        .map_err(|e| format!("Failed to create images dir / Bilderverzeichnis konnte nicht erstellt werden: {}", e))?;
+    std::fs::create_dir_all(&images_dir).map_err(|e| {
+        format!(
+            "Failed to create images dir / Bilderverzeichnis konnte nicht erstellt werden: {}",
+            e
+        )
+    })?;
     Ok(images_dir)
 }
 
@@ -104,8 +111,12 @@ fn resize_image(img: &image::DynamicImage, max_size: u32) -> image::DynamicImage
 fn encode_jpeg_base64(img: &image::DynamicImage, quality: u8) -> Result<String, String> {
     let mut buf = Cursor::new(Vec::new());
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
-    img.write_with_encoder(encoder)
-        .map_err(|e| format!("Failed to encode JPEG / JPEG-Kodierung fehlgeschlagen: {}", e))?;
+    img.write_with_encoder(encoder).map_err(|e| {
+        format!(
+            "Failed to encode JPEG / JPEG-Kodierung fehlgeschlagen: {}",
+            e
+        )
+    })?;
     Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
@@ -117,16 +128,26 @@ pub async fn analyze_receipt(
     db: State<'_, Database>,
 ) -> Result<AnalysisResult, String> {
     // 1. Load image / Bild laden
+    // Try guessing format from content if extension fails (e.g. HEIC not supported)
     let img = image::open(&image_path)
-        .map_err(|e| format!("Failed to load image / Bild konnte nicht geladen werden: {}", e))?;
+        .or_else(|_| {
+            // Fallback: read bytes and try to decode without relying on extension
+            let bytes = std::fs::read(&image_path).map_err(|e| image::ImageError::IoError(e))?;
+            image::load_from_memory(&bytes)
+        })
+        .map_err(|e| {
+            format!(
+                "Failed to load image / Bild konnte nicht geladen werden: {}",
+                e
+            )
+        })?;
 
     // 2. Create analysis copy: resize, grayscale, enhance contrast
     // Analysekopie erstellen: skalieren, Graustufen, Kontrast verbessern
     let analysis_img = resize_image(&img, 1024);
     let analysis_img = analysis_img.grayscale();
-    let analysis_img = image::DynamicImage::ImageLuma8(
-        image::imageops::contrast(&analysis_img.to_luma8(), 20.0),
-    );
+    let analysis_img =
+        image::DynamicImage::ImageLuma8(image::imageops::contrast(&analysis_img.to_luma8(), 20.0));
 
     // 3. Encode as Base64 JPEG / Als Base64-JPEG kodieren
     let base64_img = encode_jpeg_base64(&analysis_img, 85)?;
@@ -152,12 +173,19 @@ pub async fn analyze_receipt(
         let file_name = format!("{}.jpg", Uuid::new_v4());
         let file_path = images_dir.join(&file_name);
 
-        let mut file = std::fs::File::create(&file_path)
-            .map_err(|e| format!("Failed to create archive image / Archivbild konnte nicht erstellt werden: {}", e))?;
+        let mut file = std::fs::File::create(&file_path).map_err(|e| {
+            format!(
+                "Failed to create archive image / Archivbild konnte nicht erstellt werden: {}",
+                e
+            )
+        })?;
         let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 80);
-        archive_img
-            .write_with_encoder(encoder)
-            .map_err(|e| format!("Failed to save archive image / Archivbild konnte nicht gespeichert werden: {}", e))?;
+        archive_img.write_with_encoder(encoder).map_err(|e| {
+            format!(
+                "Failed to save archive image / Archivbild konnte nicht gespeichert werden: {}",
+                e
+            )
+        })?;
 
         saved_image_path = Some(file_path.to_string_lossy().to_string());
     }
@@ -267,9 +295,18 @@ fn parse_analysis_result(text: &str, image_path: Option<String>) -> AnalysisResu
 
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
         AnalysisResult {
-            markt: parsed.get("markt").and_then(|v| v.as_str()).map(String::from),
-            datum: parsed.get("datum").and_then(|v| v.as_str()).map(String::from),
-            uhrzeit: parsed.get("uhrzeit").and_then(|v| v.as_str()).map(String::from),
+            markt: parsed
+                .get("markt")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            datum: parsed
+                .get("datum")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            uhrzeit: parsed
+                .get("uhrzeit")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             artikel: parsed
                 .get("artikel")
                 .and_then(|v| v.as_array())
@@ -278,13 +315,29 @@ fn parse_analysis_result(text: &str, image_path: Option<String>) -> AnalysisResu
                         .filter_map(|item| {
                             Some(AnalyzedItem {
                                 name: item.get("name")?.as_str()?.to_string(),
+                                artikelnummer: item
+                                    .get("artikelnummer")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from),
                                 menge: item.get("menge").and_then(|v| v.as_f64()).unwrap_or(1.0),
-                                einzelpreis: item.get("einzelpreis").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                gesamtpreis: item.get("gesamtpreis").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                einzelpreis: item
+                                    .get("einzelpreis")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0),
+                                gesamtpreis: item
+                                    .get("gesamtpreis")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0),
                                 rabatt: item.get("rabatt").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                 pfand: item.get("pfand").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                kategorie: item.get("kategorie").and_then(|v| v.as_str()).map(String::from),
-                                confidence: item.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5),
+                                kategorie: item
+                                    .get("kategorie")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from),
+                                confidence: item
+                                    .get("confidence")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.5),
                             })
                         })
                         .collect()
@@ -293,7 +346,10 @@ fn parse_analysis_result(text: &str, image_path: Option<String>) -> AnalysisResu
             gesamtbetrag: parsed.get("gesamtbetrag").and_then(|v| v.as_f64()),
             rabatte_gesamt: parsed.get("rabatte_gesamt").and_then(|v| v.as_f64()),
             pfand_gesamt: parsed.get("pfand_gesamt").and_then(|v| v.as_f64()),
-            zahlungsart: parsed.get("zahlungsart").and_then(|v| v.as_str()).map(String::from),
+            zahlungsart: parsed
+                .get("zahlungsart")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             raw_text: text.to_string(),
             image_path,
         }

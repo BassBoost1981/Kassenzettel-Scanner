@@ -58,6 +58,23 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
   --font-sans: "Lexend", sans-serif;
+  --animate-scan-line: scan-line 2.5s ease-in-out infinite;
+  --animate-scan-fade: scan-fade 2.5s ease-in-out infinite;
+}
+
+/* Scanner line animation / Scanner-Linien-Animation */
+@keyframes scan-line {
+  0% { top: 0%; }
+  50% { top: 100%; }
+  100% { top: 0%; }
+}
+
+@keyframes scan-fade {
+  0% { opacity: 0.3; }
+  25% { opacity: 0.6; }
+  50% { opacity: 0.3; }
+  75% { opacity: 0.6; }
+  100% { opacity: 0.3; }
 }
 
 /*

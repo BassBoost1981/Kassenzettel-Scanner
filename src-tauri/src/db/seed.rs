@@ -31,17 +31,11 @@ pub fn insert_defaults(conn: &Connection) -> Result<(), rusqlite::Error> {
     ];
 
     for cat in &categories {
-        conn.execute(
-            "INSERT OR IGNORE INTO categories (name) VALUES (?1)",
-            [cat],
-        )?;
+        conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?1)", [cat])?;
     }
 
     for store in &stores {
-        conn.execute(
-            "INSERT OR IGNORE INTO stores (name) VALUES (?1)",
-            [store],
-        )?;
+        conn.execute("INSERT OR IGNORE INTO stores (name) VALUES (?1)", [store])?;
     }
 
     Ok(())

@@ -10,6 +10,7 @@ export interface Receipt {
   deposit_total: number;
   payment_method: string | null;
   image_path: string | null;
+  item_count?: number;
   created_at: string;
 }
 
@@ -60,6 +61,7 @@ export interface NewReceiptItem {
   discount: number;
   deposit: number;
   category_id: number | null;
+  category_name?: string | null;
 }
 
 export interface AnalysisResult {
@@ -77,6 +79,7 @@ export interface AnalysisResult {
 
 export interface AnalyzedItem {
   name: string;
+  artikelnummer: string | null;
   menge: number;
   einzelpreis: number;
   gesamtpreis: number;

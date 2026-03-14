@@ -1,8 +1,15 @@
 // Settings page with 4 tabs / Einstellungsseite mit 4 Tabs
 import { useState } from "react";
 import { useSettings } from "@/hooks/useSettings";
+import { useCategories } from "@/hooks/useCategories";
 import { useStores } from "@/hooks/useStores";
-import { checkModelExists, selectModelFile, downloadModel } from "@/lib/tauri-commands";
+import {
+  checkModelExists,
+  selectModelFile,
+  downloadModel,
+  insertMockData,
+  deleteAllReceipts,
+} from "@/lib/tauri-commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,10 +43,15 @@ import {
   SaveIcon,
   UploadIcon,
   CheckCircleIcon,
-  XCircleIcon,
   StoreIcon,
+  TagIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { Theme, KeepImages } from "@/types/settings";
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function SettingsPage() {
   return (
@@ -50,7 +62,7 @@ export function SettingsPage() {
         <TabsList>
           <TabsTrigger value="general">Allgemein</TabsTrigger>
           <TabsTrigger value="model">KI-Modell</TabsTrigger>
-          <TabsTrigger value="stores">Märkte</TabsTrigger>
+          <TabsTrigger value="stores">Märkte & Kategorien</TabsTrigger>
           <TabsTrigger value="data">Daten</TabsTrigger>
         </TabsList>
 
@@ -155,7 +167,7 @@ function ModelTab() {
         <CardHeader>
           <CardTitle>Modell-Status</CardTitle>
           <CardDescription>
-            Das KI-Modell wird für die Texterkennung der Kassenzettel benötigt.
+            Qwen2.5-VL-3B — das KI-Modell für die Texterkennung der Kassenzettel (~2,1 GB + mmproj).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -170,7 +182,6 @@ function ModelTab() {
               </Badge>
             ) : (
               <Badge variant="destructive">
-                <XCircleIcon className="size-3 mr-1" />
                 Fehlt
               </Badge>
             )}
@@ -229,31 +240,85 @@ function ModelTab() {
   );
 }
 
-// Stores management tab / Märkte-Verwaltung
+// Stores and categories management tab / Märkte- und Kategorien-Verwaltung
 function StoresTab() {
   const { stores, addStore, removeStore } = useStores();
+  const { categories, addCategory, removeCategory } = useCategories();
   const { aldiMerge, setAldiMerge } = useSettings();
   const [newStoreName, setNewStoreName] = useState("");
-  const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [deleteStoreId, setDeleteStoreId] = useState<number | null>(null);
+  const [deleteCategoryId, setDeleteCategoryId] = useState<number | null>(null);
+  const [deleteStoreOpen, setDeleteStoreOpen] = useState(false);
+  const [deleteCategoryOpen, setDeleteCategoryOpen] = useState(false);
 
-  const handleAdd = async () => {
-    if (newStoreName.trim()) {
-      await addStore(newStoreName.trim());
+  const handleAddStore = async () => {
+    const name = newStoreName.trim();
+    if (!name) {
+      return;
+    }
+
+    try {
+      await addStore(name);
       setNewStoreName("");
+      toast.success(`Markt "${name}" hinzugefügt`);
+    } catch (error) {
+      toast.error(`Markt konnte nicht hinzugefügt werden: ${getErrorMessage(error)}`);
     }
   };
 
-  const confirmDelete = (id: number) => {
-    setDeleteId(id);
-    setDeleteOpen(true);
+  const handleAddCategory = async () => {
+    const name = newCategoryName.trim();
+    if (!name) {
+      return;
+    }
+
+    try {
+      await addCategory(name);
+      setNewCategoryName("");
+      toast.success(`Kategorie "${name}" hinzugefügt`);
+    } catch (error) {
+      toast.error(`Kategorie konnte nicht hinzugefügt werden: ${getErrorMessage(error)}`);
+    }
   };
 
-  const handleDelete = async () => {
-    if (deleteId !== null) {
-      await removeStore(deleteId);
-      setDeleteOpen(false);
-      setDeleteId(null);
+  const confirmDeleteStore = (id: number) => {
+    setDeleteStoreId(id);
+    setDeleteStoreOpen(true);
+  };
+
+  const confirmDeleteCategory = (id: number) => {
+    setDeleteCategoryId(id);
+    setDeleteCategoryOpen(true);
+  };
+
+  const handleDeleteStore = async () => {
+    if (deleteStoreId === null) {
+      return;
+    }
+
+    try {
+      await removeStore(deleteStoreId);
+      toast.success("Markt gelöscht");
+      setDeleteStoreOpen(false);
+      setDeleteStoreId(null);
+    } catch (error) {
+      toast.error(`Markt konnte nicht gelöscht werden: ${getErrorMessage(error)}`);
+    }
+  };
+
+  const handleDeleteCategory = async () => {
+    if (deleteCategoryId === null) {
+      return;
+    }
+
+    try {
+      await removeCategory(deleteCategoryId);
+      toast.success("Kategorie gelöscht");
+      setDeleteCategoryOpen(false);
+      setDeleteCategoryId(null);
+    } catch (error) {
+      toast.error(`Kategorie konnte nicht gelöscht werden: ${getErrorMessage(error)}`);
     }
   };
 
@@ -273,10 +338,10 @@ function StoresTab() {
               placeholder="Neuer Markt..."
               value={newStoreName}
               onChange={(e) => setNewStoreName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+              onKeyDown={(e) => e.key === "Enter" && void handleAddStore()}
               className="flex-1"
             />
-            <Button onClick={handleAdd} disabled={!newStoreName.trim()}>
+            <Button onClick={() => void handleAddStore()} disabled={!newStoreName.trim()}>
               <PlusIcon className="size-4 mr-1" />
               Hinzufügen
             </Button>
@@ -303,7 +368,63 @@ function StoresTab() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={() => confirmDelete(store.id)}
+                    onClick={() => confirmDeleteStore(store.id)}
+                  >
+                    <Trash2Icon className="size-4 text-destructive" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Eigene Kategorien</CardTitle>
+          <CardDescription>
+            Diese Kategorien stehen dir beim Korrigieren und in Auswertungen zur Verfügung.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-2">
+            <Input
+              placeholder="Neue Kategorie..."
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void handleAddCategory()}
+              className="flex-1"
+            />
+            <Button
+              onClick={() => void handleAddCategory()}
+              disabled={!newCategoryName.trim()}
+            >
+              <PlusIcon className="size-4 mr-1" />
+              Hinzufügen
+            </Button>
+          </div>
+
+          <Separator />
+
+          {categories.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              Noch keine Kategorien gespeichert.
+            </p>
+          ) : (
+            <div className="space-y-1">
+              {categories.map((category) => (
+                <div
+                  key={category.id}
+                  className="flex items-center justify-between py-2 px-3 rounded-md hover:bg-muted/50"
+                >
+                  <div className="flex items-center gap-2">
+                    <TagIcon className="size-4 text-muted-foreground" />
+                    <span className="text-sm">{category.name}</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => confirmDeleteCategory(category.id)}
                   >
                     <Trash2Icon className="size-4 text-destructive" />
                   </Button>
@@ -341,8 +462,8 @@ function StoresTab() {
         </CardContent>
       </Card>
 
-      {/* Delete confirmation / Lösch-Bestätigung */}
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      {/* Store delete confirmation / Lösch-Bestätigung für Märkte */}
+      <Dialog open={deleteStoreOpen} onOpenChange={setDeleteStoreOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Markt löschen?</DialogTitle>
@@ -355,7 +476,27 @@ function StoresTab() {
             <DialogClose render={<Button variant="outline" />}>
               Abbrechen
             </DialogClose>
-            <Button variant="destructive" onClick={handleDelete}>
+            <Button variant="destructive" onClick={() => void handleDeleteStore()}>
+              Löschen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Category delete confirmation / Lösch-Bestätigung für Kategorien */}
+      <Dialog open={deleteCategoryOpen} onOpenChange={setDeleteCategoryOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Kategorie löschen?</DialogTitle>
+            <DialogDescription>
+              Kategorien können nur gelöscht werden, wenn sie noch keinem gespeicherten Artikel zugeordnet sind.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Abbrechen
+            </DialogClose>
+            <Button variant="destructive" onClick={() => void handleDeleteCategory()}>
               Löschen
             </Button>
           </DialogFooter>
@@ -376,8 +517,7 @@ function DataTab() {
   ];
 
   const showToast = (message: string) => {
-    // Simple toast placeholder / Einfacher Toast-Platzhalter
-    alert(message);
+    toast(message);
   };
 
   return (
@@ -446,6 +586,47 @@ function DataTab() {
             >
               <UploadIcon className="size-4 mr-2" />
               Backup laden
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Testdaten / Mock data */}
+      <Card className="border-dashed border-yellow-500/50">
+        <CardHeader>
+          <CardTitle>Testdaten (Entwicklung)</CardTitle>
+          <CardDescription>
+            Mock-Daten zum Testen von Preisverlauf und Dashboard einfügen oder löschen.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                try {
+                  const result = await insertMockData();
+                  showToast(result);
+                } catch (e) {
+                  showToast("Fehler: " + String(e));
+                }
+              }}
+            >
+              Testdaten einfügen
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!confirm("Alle Kassenzettel löschen? Das kann nicht rückgängig gemacht werden.")) return;
+                try {
+                  const result = await deleteAllReceipts();
+                  showToast(result);
+                } catch (e) {
+                  showToast("Fehler: " + String(e));
+                }
+              }}
+            >
+              Alle Kassenzettel löschen
             </Button>
           </div>
         </CardContent>

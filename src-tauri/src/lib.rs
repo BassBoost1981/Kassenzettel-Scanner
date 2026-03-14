@@ -42,6 +42,9 @@ pub fn run() {
             commands::stores::create_store,
             commands::stores::update_store,
             commands::stores::delete_store,
+            commands::categories::get_categories,
+            commands::categories::create_category,
+            commands::categories::delete_category,
             commands::receipts::create_receipt,
             commands::receipts::get_receipts,
             commands::receipts::get_receipt_detail,
@@ -57,10 +60,20 @@ pub fn run() {
             commands::scanner::is_scanner_available,
             commands::scanner::scan_document,
             commands::export::export_receipts_csv,
+            commands::mockdata::insert_mock_data,
+            commands::mockdata::delete_all_receipts,
+            commands::pricechart::search_product_names,
+            commands::pricechart::get_price_history,
+            commands::pricechart::get_price_range,
+            commands::dashboard::get_monthly_spending,
+            commands::dashboard::get_category_spending,
         ])
         .on_window_event(|window, event| {
             // Stop sidecar on window close / Sidecar beim Fensterschliessen stoppen
-            if let tauri::WindowEvent::Destroyed = event {
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) {
                 let app = window.app_handle();
                 let state = app.state::<sidecar::SidecarState>();
                 let _ = sidecar::stop_llama_server(state);

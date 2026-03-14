@@ -1,6 +1,7 @@
 // Correction table for reviewed receipt data / Korrektur-Tabelle fuer ueberprueften Kassenzettel
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import {
   X,
   Plus,
@@ -9,11 +10,16 @@ import {
   AlertTriangle,
   ZoomIn,
   ZoomOut,
+  Pencil,
+  PlusCircle,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "sonner";
 import {
   Table,
   TableBody,
@@ -33,6 +39,7 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog";
+import { useCategories } from "@/hooks/useCategories";
 import { useReceipts } from "@/hooks/useReceipts";
 import { useStores } from "@/hooks/useStores";
 import type { AnalysisResult, AnalyzedItem, NewReceipt, NewReceiptItem } from "@/types/receipt";
@@ -45,18 +52,16 @@ interface CorrectionTableProps {
   onDiscard: () => void;
 }
 
-// Default categories / Standard-Kategorien
-const CATEGORIES = [
-  "Lebensmittel",
-  "Getraenke",
-  "Haushalt",
-  "Hygiene",
-  "Tierbedarf",
-  "Sonstiges",
-];
-
 interface EditableItem extends AnalyzedItem {
   _id: number;
+}
+
+function normalizeCategoryName(value: string | null | undefined) {
+  return value?.trim() ?? "";
+}
+
+function categoryLookupKey(value: string | null | undefined) {
+  return normalizeCategoryName(value).toLocaleLowerCase("de-DE");
 }
 
 export function CorrectionTable({
@@ -67,6 +72,7 @@ export function CorrectionTable({
 }: CorrectionTableProps) {
   const { addReceipt } = useReceipts();
   const { stores, addStore } = useStores();
+  const { categories, addCategory, loading: categoriesLoading } = useCategories();
 
   // Editable state initialized from AnalysisResult / Bearbeitbarer Zustand aus AnalysisResult
   const [storeName, setStoreName] = useState(result.markt ?? "");
@@ -84,6 +90,48 @@ export function CorrectionTable({
     row: number;
     col: string;
   } | null>(null);
+  // Price ranges for known products / Preisbereiche fuer bekannte Produkte
+  const [priceRanges, setPriceRanges] = useState<Record<string, [number, number]>>({});
+
+  // Load price ranges for all items / Preisbereiche fuer alle Artikel laden
+  useEffect(() => {
+    let ignore = false;
+
+    const loadRanges = async () => {
+      const uniqueNames = Array.from(
+        new Set(items.map((item) => item.name.trim()).filter(Boolean))
+      );
+
+      if (uniqueNames.length === 0) {
+        setPriceRanges({});
+        return;
+      }
+
+      const ranges: Record<string, [number, number]> = {};
+      for (const name of uniqueNames) {
+        try {
+          const range = await invoke<[number, number] | null>("get_price_range", {
+            productName: name,
+          });
+          if (!ignore && range) {
+            ranges[name] = range;
+          }
+        } catch {
+          // Ignore missing history / Fehlende Historie ignorieren
+        }
+      }
+
+      if (!ignore) {
+        setPriceRanges(ranges);
+      }
+    };
+
+    loadRanges();
+
+    return () => {
+      ignore = true;
+    };
+  }, [items]);
 
   const imageSrc = convertFileSrc(imagePath);
 
@@ -91,15 +139,28 @@ export function CorrectionTable({
   const subtotal = items.reduce((sum, item) => sum + item.gesamtpreis, 0);
   const discountTotal = items.reduce((sum, item) => sum + item.rabatt, 0);
   const depositTotal = items.reduce((sum, item) => sum + item.pfand, 0);
-  const grandTotal = result.gesamtbetrag ?? subtotal - discountTotal + depositTotal;
+  const computedGrandTotal = subtotal - discountTotal + depositTotal;
+  const grandTotal = items.length > 0 ? computedGrandTotal : (result.gesamtbetrag ?? 0);
 
   // Update item field / Artikelfeld aktualisieren
   const updateItem = useCallback(
     (id: number, field: keyof AnalyzedItem, value: string | number) => {
       setItems((prev) =>
-        prev.map((item) =>
-          item._id === id ? { ...item, [field]: value } : item
-        )
+        prev.map((item) => {
+          if (item._id !== id) {
+            return item;
+          }
+
+          const nextItem = { ...item, [field]: value };
+
+          if (field === "menge" || field === "einzelpreis") {
+            nextItem.gesamtpreis = Number(
+              (nextItem.menge * nextItem.einzelpreis).toFixed(2)
+            );
+          }
+
+          return nextItem;
+        })
       );
     },
     []
@@ -115,6 +176,7 @@ export function CorrectionTable({
     const newItem: EditableItem = {
       _id: nextId,
       name: "",
+      artikelnummer: null,
       menge: 1,
       einzelpreis: 0,
       gesamtpreis: 0,
@@ -127,6 +189,35 @@ export function CorrectionTable({
     setNextId((prev) => prev + 1);
   }, [nextId]);
 
+  const categoryExists = useCallback(
+    (name: string) => {
+      const lookupKey = categoryLookupKey(name);
+      return (
+        lookupKey !== "" &&
+        categories.some((category) => categoryLookupKey(category.name) === lookupKey)
+      );
+    },
+    [categories]
+  );
+
+  const handleQuickAddCategory = useCallback(
+    async (rawName: string) => {
+      const categoryName = normalizeCategoryName(rawName);
+
+      if (!categoryName || categoryExists(categoryName)) {
+        return;
+      }
+
+      try {
+        await addCategory(categoryName);
+        toast.success(`Kategorie "${categoryName}" hinzugefügt`);
+      } catch (error) {
+        toast.error(`Kategorie konnte nicht angelegt werden: ${String(error)}`);
+      }
+    },
+    [addCategory, categoryExists]
+  );
+
   // Handle save / Speichern
   const handleSave = async () => {
     setSaving(true);
@@ -135,27 +226,33 @@ export function CorrectionTable({
     try {
       // Find or create store / Markt finden oder erstellen
       let storeId: number;
+      const normalizedStoreName = storeName.trim() || "Unbekannt";
       const existingStore = stores.find(
-        (s) => s.name.toLowerCase() === storeName.toLowerCase()
+        (s) => s.name.toLowerCase() === normalizedStoreName.toLowerCase()
       );
 
       if (existingStore) {
         storeId = existingStore.id;
       } else {
-        const newStore = await addStore(storeName || "Unbekannt");
+        const newStore = await addStore(normalizedStoreName);
         storeId = newStore.id;
       }
 
       // Build receipt items / Kassenzettel-Positionen erstellen
-      const receiptItems: NewReceiptItem[] = items.map((item) => ({
-        raw_name: item.name,
-        quantity: item.menge,
-        unit_price: item.einzelpreis,
-        total_price: item.gesamtpreis,
-        discount: item.rabatt,
-        deposit: item.pfand,
-        category_id: null, // Category lookup handled by backend / Kategorie-Zuordnung im Backend
-      }));
+      const receiptItems: NewReceiptItem[] = items.map((item) => {
+        const categoryName = normalizeCategoryName(item.kategorie);
+
+        return {
+          raw_name: item.name,
+          quantity: item.menge,
+          unit_price: item.einzelpreis,
+          total_price: item.gesamtpreis,
+          discount: item.rabatt,
+          deposit: item.pfand,
+          category_id: null, // Category lookup handled by backend / Kategorie-Zuordnung im Backend
+          category_name: categoryName || null,
+        };
+      });
 
       const newReceipt: NewReceipt = {
         store_id: storeId,
@@ -165,7 +262,7 @@ export function CorrectionTable({
         discount_total: discountTotal,
         deposit_total: depositTotal,
         payment_method: paymentMethod || null,
-        image_path: imagePath,
+        image_path: result.image_path ?? imagePath,
         raw_json: JSON.stringify(result),
         items: receiptItems,
       };
@@ -229,8 +326,8 @@ export function CorrectionTable({
     return (
       <span
         className={cn(
-          "block cursor-pointer rounded px-1 py-0.5 hover:bg-muted/50",
-          align === "right" && "text-right",
+          "group flex items-center gap-1 cursor-pointer rounded px-1 py-0.5 hover:bg-muted/50",
+          align === "right" && "justify-end text-right",
           cellClassName
         )}
         onClick={() => setEditingCell({ row: rowId, col })}
@@ -238,6 +335,7 @@ export function CorrectionTable({
         {type === "number"
           ? (value as number).toFixed(2)
           : value || "\u00A0"}
+        <Pencil className="size-3 opacity-0 group-hover:opacity-50 shrink-0" />
       </span>
     );
   };
@@ -286,20 +384,48 @@ export function CorrectionTable({
           <div className="p-6">
             {/* Header fields / Kopfzeilen-Felder */}
             <div className="mb-6 grid grid-cols-2 gap-4">
-              {/* Store name / Marktname */}
+              {/* Store name with add button / Marktname mit Hinzufuegen-Button */}
               <div className="col-span-2">
                 <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
                   Markt
                 </label>
-                <Input
-                  value={storeName}
-                  onChange={(e) => setStoreName(e.target.value)}
-                  placeholder="Marktname eingeben..."
-                  list="store-suggestions"
-                />
-                <datalist id="store-suggestions">
-                  {stores.map((s) => (
-                    <option key={s.id} value={s.name} />
+                <div className="flex gap-2">
+                  <Input
+                    value={storeName}
+                    onChange={(e) => setStoreName(e.target.value)}
+                    placeholder="Marktname eingeben..."
+                    list="store-suggestions"
+                    className="flex-1"
+                  />
+                  <datalist id="store-suggestions">
+                    {stores.map((s) => (
+                      <option key={s.id} value={s.name} />
+                    ))}
+                  </datalist>
+                  {storeName.trim() &&
+                    !stores.find((s) => s.name.toLowerCase() === storeName.trim().toLowerCase()) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 text-green-600 border-green-600 hover:bg-green-600/10"
+                      onClick={async () => {
+                        try {
+                          await addStore(storeName.trim());
+                          toast.success(`Markt "${storeName.trim()}" hinzugefügt`);
+                        } catch (error) {
+                          toast.error(`Markt konnte nicht angelegt werden: ${String(error)}`);
+                        }
+                      }}
+                      title="Markt zur Liste hinzufügen"
+                    >
+                      <PlusCircle className="mr-1 size-4" />
+                      Hinzufügen
+                    </Button>
+                    )}
+                </div>
+                <datalist id="category-suggestions">
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.name} />
                   ))}
                 </datalist>
               </div>
@@ -346,13 +472,15 @@ export function CorrectionTable({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[30%]">Artikel</TableHead>
-                    <TableHead className="w-[8%] text-right">Menge</TableHead>
-                    <TableHead className="w-[12%] text-right">Einzelpreis</TableHead>
-                    <TableHead className="w-[12%] text-right">Gesamt</TableHead>
-                    <TableHead className="w-[18%]">Kategorie</TableHead>
-                    <TableHead className="w-[10%] text-center">Status</TableHead>
-                    <TableHead className="w-[5%]" />
+                    <TableHead className="w-[22%]">Artikel</TableHead>
+                    <TableHead className="w-[10%]">Art.-Nr.</TableHead>
+                    <TableHead className="w-[6%] text-right">Menge</TableHead>
+                    <TableHead className="w-[9%] text-right">Einzelpreis</TableHead>
+                    <TableHead className="w-[9%] text-right">Gesamt</TableHead>
+                    <TableHead className="w-[14%] text-center">Preis-Historie</TableHead>
+                    <TableHead className="w-[13%]">Kategorie</TableHead>
+                    <TableHead className="w-[6%] text-center">Status</TableHead>
+                    <TableHead className="w-[3%]" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -369,6 +497,13 @@ export function CorrectionTable({
                           rowId={item._id}
                           col="name"
                           value={item.name}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <EditableCell
+                          rowId={item._id}
+                          col="artikelnummer"
+                          value={item.artikelnummer || ""}
                         />
                       </TableCell>
                       <TableCell>
@@ -398,25 +533,48 @@ export function CorrectionTable({
                           align="right"
                         />
                       </TableCell>
+                      {/* Price range / Preisbereich */}
+                      <TableCell className="text-center">
+                        {priceRanges[item.name] ? (
+                          <div className="flex flex-col items-center text-xs gap-0.5">
+                            <span className="flex items-center gap-0.5 text-green-500">
+                              <TrendingDown className="size-3" />
+                              {priceRanges[item.name][0].toFixed(2)}€
+                            </span>
+                            <span className="flex items-center gap-0.5 text-red-500">
+                              <TrendingUp className="size-3" />
+                              {priceRanges[item.name][1].toFixed(2)}€
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell>
-                        <select
-                          value={item.kategorie ?? ""}
-                          onChange={(e) =>
-                            updateItem(
-                              item._id,
-                              "kategorie",
-                              e.target.value || ""
-                            )
-                          }
-                          className="h-7 w-full rounded border border-border bg-background px-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                          <option value="">-- Keine --</option>
-                          {CATEGORIES.map((cat) => (
-                            <option key={cat} value={cat}>
-                              {cat}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            value={item.kategorie ?? ""}
+                            onChange={(e) =>
+                              updateItem(item._id, "kategorie", e.target.value)
+                            }
+                            list="category-suggestions"
+                            placeholder="Kategorie"
+                            className="h-7"
+                          />
+                          {normalizeCategoryName(item.kategorie) &&
+                            !categoryExists(item.kategorie ?? "") && (
+                              <Button
+                                variant="outline"
+                                size="icon-xs"
+                                className="shrink-0 text-green-600 border-green-600 hover:bg-green-600/10"
+                                disabled={categoriesLoading}
+                                onClick={() => void handleQuickAddCategory(item.kategorie ?? "")}
+                                title="Kategorie zur Liste hinzufügen"
+                              >
+                                <PlusCircle className="size-3.5" />
+                              </Button>
+                            )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-center">
                         {item.confidence < 0.7 && (
@@ -441,7 +599,7 @@ export function CorrectionTable({
                 </TableBody>
                 <TableFooter>
                   <TableRow>
-                    <TableCell colSpan={7} className="p-0">
+                    <TableCell colSpan={8} className="p-0">
                       <Button
                         variant="ghost"
                         size="sm"

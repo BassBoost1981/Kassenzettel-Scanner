@@ -86,7 +86,10 @@ pub fn update_store(
         )
         .map_err(|e| e.to_string())?;
     if affected == 0 {
-        return Err(format!("Store with id {} not found / Markt mit id {} nicht gefunden", id, id));
+        return Err(format!(
+            "Store with id {} not found / Markt mit id {} nicht gefunden",
+            id, id
+        ));
     }
     Ok(())
 }
@@ -100,7 +103,10 @@ pub fn delete_store(id: i64, db: State<'_, Database>) -> Result<(), String> {
         .execute("DELETE FROM stores WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
     if affected == 0 {
-        return Err(format!("Store with id {} not found / Markt mit id {} nicht gefunden", id, id));
+        return Err(format!(
+            "Store with id {} not found / Markt mit id {} nicht gefunden",
+            id, id
+        ));
     }
     Ok(())
 }
@@ -175,11 +181,9 @@ mod tests {
 
         // Verify deleted / Pruefe Loeschung
         let count: i32 = conn
-            .query_row(
-                "SELECT count(*) FROM stores WHERE id = ?1",
-                [id],
-                |row| row.get(0),
-            )
+            .query_row("SELECT count(*) FROM stores WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 0);
     }

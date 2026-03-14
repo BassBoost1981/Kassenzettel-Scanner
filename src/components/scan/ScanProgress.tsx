@@ -72,11 +72,20 @@ export function ScanProgress({ imagePath, onComplete }: ScanProgressProps) {
           <h3 className="text-sm font-medium text-muted-foreground">Vorschau</h3>
         </div>
         <div className="flex flex-1 items-center justify-center overflow-auto p-4">
-          <img
-            src={imageSrc}
-            alt="Kassenzettel"
-            className="max-h-full max-w-full rounded-lg object-contain shadow-md"
-          />
+          <div className="relative inline-block">
+            <img
+              src={imageSrc}
+              alt="Kassenzettel"
+              className="max-h-full max-w-full rounded-lg object-contain shadow-md"
+            />
+            {/* Scanner line animation / Scanner-Linien-Animation */}
+            {analyzing && !hasError && (
+              <div className="absolute inset-0 overflow-hidden rounded-lg pointer-events-none">
+                <div className="absolute left-0 right-0 h-[2px] bg-primary shadow-[0_0_8px_2px] shadow-primary/50 animate-scan-line" />
+                <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent animate-scan-fade" />
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

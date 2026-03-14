@@ -19,8 +19,17 @@ export function useAnalyze(): UseAnalyzeReturn {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const runIdRef = useRef(0);
 
   const startAnalysis = useCallback(async (imagePath: string) => {
+    runIdRef.current += 1;
+    const runId = runIdRef.current;
+
+    if (unlistenRef.current) {
+      unlistenRef.current();
+      unlistenRef.current = null;
+    }
+
     setAnalyzing(true);
     setTokens("");
     setResult(null);
@@ -28,7 +37,8 @@ export function useAnalyze(): UseAnalyzeReturn {
 
     // Listen for streaming tokens / Auf Streaming-Tokens lauschen
     try {
-      unlistenRef.current = await listen<string>("llm-token", (event) => {
+      unlistenRef.current = await listen<string>("analysis-token", (event) => {
+        if (runIdRef.current !== runId) return;
         setTokens((prev) => prev + event.payload);
       });
     } catch {
@@ -37,22 +47,31 @@ export function useAnalyze(): UseAnalyzeReturn {
 
     try {
       const analysisResult = await analyzeReceipt(imagePath);
+      if (runIdRef.current !== runId) return null;
       setResult(analysisResult);
       return analysisResult;
     } catch (err) {
+      if (runIdRef.current !== runId) return null;
       const message = String(err);
       setError(message);
       return null;
     } finally {
-      setAnalyzing(false);
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
+      if (runIdRef.current === runId) {
+        setAnalyzing(false);
+        if (unlistenRef.current) {
+          unlistenRef.current();
+          unlistenRef.current = null;
+        }
       }
     }
   }, []);
 
   const reset = useCallback(() => {
+    runIdRef.current += 1;
+    if (unlistenRef.current) {
+      unlistenRef.current();
+      unlistenRef.current = null;
+    }
     setAnalyzing(false);
     setTokens("");
     setResult(null);

@@ -1,7 +1,7 @@
 // Receipt commands — CRUD for receipts and receipt items
 // Kassenzettel-Befehle — CRUD fuer Kassenzettel und Kassenzettel-Positionen
 
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -32,6 +32,7 @@ pub struct NewReceiptItem {
     pub discount: f64,
     pub deposit: f64,
     pub category_id: Option<i64>,
+    pub category_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -86,6 +87,42 @@ pub struct ReceiptFilter {
 
 // ── Commands / Befehle ──
 
+fn resolve_category_id(
+    conn: &Connection,
+    category_id: Option<i64>,
+    category_name: Option<&str>,
+) -> Result<Option<i64>, String> {
+    if let Some(category_id) = category_id {
+        return Ok(Some(category_id));
+    }
+
+    let Some(category_name) = category_name.map(str::trim) else {
+        return Ok(None);
+    };
+
+    if category_name.is_empty() {
+        return Ok(None);
+    }
+
+    let existing_category_id = conn
+        .query_row(
+            "SELECT id FROM categories WHERE lower(name) = lower(?1)",
+            [category_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if let Some(existing_category_id) = existing_category_id {
+        return Ok(Some(existing_category_id));
+    }
+
+    conn.execute("INSERT INTO categories (name) VALUES (?1)", [category_name])
+        .map_err(|e| e.to_string())?;
+
+    Ok(Some(conn.last_insert_rowid()))
+}
+
 /// Create a receipt with all items in a single transaction.
 /// Kassenzettel mit allen Positionen in einer Transaktion erstellen.
 #[tauri::command]
@@ -120,6 +157,9 @@ pub fn create_receipt(
 
         // Insert all items / Alle Positionen einfuegen
         for item in &receipt.items {
+            let category_id =
+                resolve_category_id(&conn, item.category_id, item.category_name.as_deref())?;
+
             conn.execute(
                 "INSERT INTO receipt_items (receipt_id, raw_name, quantity, unit_price, total_price, discount, deposit, category_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -131,7 +171,7 @@ pub fn create_receipt(
                     item.total_price,
                     item.discount,
                     item.deposit,
-                    item.category_id,
+                    category_id,
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -280,7 +320,12 @@ pub fn get_receipt_detail(id: i64, db: State<'_, Database>) -> Result<ReceiptDet
         )
         .optional()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Receipt with id {} not found / Kassenzettel mit id {} nicht gefunden", id, id))?;
+        .ok_or_else(|| {
+            format!(
+                "Receipt with id {} not found / Kassenzettel mit id {} nicht gefunden",
+                id, id
+            )
+        })?;
 
     // Get items / Positionen abrufen
     let mut stmt = conn
@@ -337,7 +382,10 @@ pub fn delete_receipt(id: i64, db: State<'_, Database>) -> Result<(), String> {
 /// Search receipts by item raw_name.
 /// Kassenzettel nach Positionsname durchsuchen.
 #[tauri::command]
-pub fn search_receipts(query: String, db: State<'_, Database>) -> Result<Vec<ReceiptSummary>, String> {
+pub fn search_receipts(
+    query: String,
+    db: State<'_, Database>,
+) -> Result<Vec<ReceiptSummary>, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let pattern = format!("%{}%", query);
     let mut stmt = conn
@@ -383,7 +431,13 @@ mod tests {
 
     /// Helper: insert a receipt with items directly via SQL.
     /// Hilfsfunktion: Kassenzettel mit Positionen direkt per SQL einfuegen.
-    fn insert_test_receipt(conn: &rusqlite::Connection, store_id: i64, date: &str, total: f64, items: &[(&str, f64, f64)]) -> i64 {
+    fn insert_test_receipt(
+        conn: &rusqlite::Connection,
+        store_id: i64,
+        date: &str,
+        total: f64,
+        items: &[(&str, f64, f64)],
+    ) -> i64 {
         conn.execute(
             "INSERT INTO receipts (store_id, date, total_amount) VALUES (?1, ?2, ?3)",
             rusqlite::params![store_id, date, total],
@@ -406,15 +460,25 @@ mod tests {
         let db = test_db();
         let conn = db.conn.lock().unwrap();
 
-        let receipt_id = insert_test_receipt(&conn, 1, "2024-06-15", 5.87, &[
-            ("Milch 3.5%", 1.0, 1.29),
-            ("Brot Vollkorn", 1.0, 2.49),
-            ("Butter", 1.0, 2.09),
-        ]);
+        let receipt_id = insert_test_receipt(
+            &conn,
+            1,
+            "2024-06-15",
+            5.87,
+            &[
+                ("Milch 3.5%", 1.0, 1.29),
+                ("Brot Vollkorn", 1.0, 2.49),
+                ("Butter", 1.0, 2.09),
+            ],
+        );
 
         // Verify receipt exists / Pruefe ob Kassenzettel existiert
         let total: f64 = conn
-            .query_row("SELECT total_amount FROM receipts WHERE id = ?1", [receipt_id], |row| row.get(0))
+            .query_row(
+                "SELECT total_amount FROM receipts WHERE id = ?1",
+                [receipt_id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert!((total - 5.87).abs() < 0.001);
 
@@ -430,14 +494,52 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_category_id_creates_missing_category() {
+        let db = test_db();
+        let conn = db.conn.lock().unwrap();
+
+        let category_id = resolve_category_id(&conn, None, Some("Haustier")).unwrap();
+        assert!(category_id.is_some());
+
+        let created_name: String = conn
+            .query_row(
+                "SELECT name FROM categories WHERE id = ?1",
+                [category_id.unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(created_name, "Haustier");
+    }
+
+    #[test]
+    fn test_resolve_category_id_matches_existing_category_case_insensitive() {
+        let db = test_db();
+        let conn = db.conn.lock().unwrap();
+
+        let existing_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Sonstiges'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let resolved_id = resolve_category_id(&conn, None, Some(" sonstiges ")).unwrap();
+        assert_eq!(resolved_id, Some(existing_id));
+    }
+
+    #[test]
     fn test_get_receipt_detail() {
         let db = test_db();
         let conn = db.conn.lock().unwrap();
 
-        let receipt_id = insert_test_receipt(&conn, 1, "2024-06-15", 3.58, &[
-            ("Milch", 1.0, 1.29),
-            ("Kaese", 1.0, 2.29),
-        ]);
+        let receipt_id = insert_test_receipt(
+            &conn,
+            1,
+            "2024-06-15",
+            3.58,
+            &[("Milch", 1.0, 1.29), ("Kaese", 1.0, 2.29)],
+        );
 
         // Query detail / Detail abfragen
         let detail = conn
@@ -567,13 +669,14 @@ mod tests {
         let db = test_db();
         let conn = db.conn.lock().unwrap();
 
-        insert_test_receipt(&conn, 1, "2024-06-15", 5.0, &[
-            ("Milch 3.5%", 1.0, 1.29),
-            ("Brot", 1.0, 2.49),
-        ]);
-        insert_test_receipt(&conn, 1, "2024-06-16", 3.0, &[
-            ("Kaese Gouda", 1.0, 3.0),
-        ]);
+        insert_test_receipt(
+            &conn,
+            1,
+            "2024-06-15",
+            5.0,
+            &[("Milch 3.5%", 1.0, 1.29), ("Brot", 1.0, 2.49)],
+        );
+        insert_test_receipt(&conn, 1, "2024-06-16", 3.0, &[("Kaese Gouda", 1.0, 3.0)]);
 
         // Search for "Milch" / Nach "Milch" suchen
         let pattern = "%Milch%";
@@ -612,14 +715,21 @@ mod tests {
         let db = test_db();
         let conn = db.conn.lock().unwrap();
 
-        let receipt_id = insert_test_receipt(&conn, 1, "2024-06-15", 5.0, &[
-            ("Milch", 1.0, 1.29),
-            ("Brot", 1.0, 2.49),
-        ]);
+        let receipt_id = insert_test_receipt(
+            &conn,
+            1,
+            "2024-06-15",
+            5.0,
+            &[("Milch", 1.0, 1.29), ("Brot", 1.0, 2.49)],
+        );
 
         // Verify items exist / Pruefe ob Positionen existieren
         let count_before: i64 = conn
-            .query_row("SELECT count(*) FROM receipt_items WHERE receipt_id = ?1", [receipt_id], |row| row.get(0))
+            .query_row(
+                "SELECT count(*) FROM receipt_items WHERE receipt_id = ?1",
+                [receipt_id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count_before, 2);
 
@@ -629,7 +739,11 @@ mod tests {
 
         // Items should be gone / Positionen sollten weg sein
         let count_after: i64 = conn
-            .query_row("SELECT count(*) FROM receipt_items WHERE receipt_id = ?1", [receipt_id], |row| row.get(0))
+            .query_row(
+                "SELECT count(*) FROM receipt_items WHERE receipt_id = ?1",
+                [receipt_id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count_after, 0);
     }

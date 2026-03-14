@@ -61,8 +61,8 @@ pub fn get_monthly_spending(db: State<'_, Database>) -> Result<Vec<MonthlySpendi
             })
         })
         .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| e.to_string())?;
 
     Ok(results)
 }
@@ -100,8 +100,8 @@ pub fn get_category_spending(
             })
         })
         .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| e.to_string())?;
 
     Ok(results)
 }

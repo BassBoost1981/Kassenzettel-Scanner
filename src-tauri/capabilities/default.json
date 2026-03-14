@@ -14,7 +14,12 @@
     "fs:scope-home",
     {
       "identifier": "fs:scope",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$RESOURCE/**" },
+        { "path": "$TEMP/**" },
+        { "path": "$HOME/**" }
+      ]
     }
   ]
 }

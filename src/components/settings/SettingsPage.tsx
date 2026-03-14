@@ -226,7 +226,19 @@ function ModelTab() {
             <Input
               type="number"
               value={gpuLayers}
-              onChange={(e) => setGpuLayers(e.target.value)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                // Allow empty input while typing / Leere Eingabe beim Tippen erlauben
+                if (raw === "" || raw === "-") {
+                  setGpuLayers(raw);
+                  return;
+                }
+                const parsed = parseInt(raw, 10);
+                // Validate: must be integer >= -1 / Validierung: Ganzzahl >= -1
+                if (!isNaN(parsed) && parsed >= -1) {
+                  setGpuLayers(String(parsed));
+                }
+              }}
               className="w-24"
               min={-1}
             />
@@ -509,6 +521,7 @@ function StoresTab() {
 // Data management tab / Daten-Verwaltung
 function DataTab() {
   const { keepImages, setKeepImages } = useSettings();
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
 
   const imageOptions: { value: KeepImages; label: string; desc: string }[] = [
     { value: "keep", label: "Behalten", desc: "Bilder dauerhaft speichern" },
@@ -614,20 +627,43 @@ function DataTab() {
             >
               Testdaten einfügen
             </Button>
-            <Button
-              variant="destructive"
-              onClick={async () => {
-                if (!confirm("Alle Kassenzettel löschen? Das kann nicht rückgängig gemacht werden.")) return;
-                try {
-                  const result = await deleteAllReceipts();
-                  showToast(result);
-                } catch (e) {
-                  showToast("Fehler: " + String(e));
-                }
-              }}
-            >
-              Alle Kassenzettel löschen
-            </Button>
+            {!confirmDeleteAll ? (
+              <Button
+                variant="destructive"
+                onClick={() => setConfirmDeleteAll(true)}
+              >
+                Alle Kassenzettel löschen
+              </Button>
+            ) : (
+              /* Inline confirmation / Inline-Bestätigung */
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-destructive font-medium">
+                  Wirklich alle löschen?
+                </span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const result = await deleteAllReceipts();
+                      showToast(result);
+                    } catch (e) {
+                      showToast("Fehler: " + String(e));
+                    }
+                    setConfirmDeleteAll(false);
+                  }}
+                >
+                  Ja, löschen
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmDeleteAll(false)}
+                >
+                  Abbrechen
+                </Button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

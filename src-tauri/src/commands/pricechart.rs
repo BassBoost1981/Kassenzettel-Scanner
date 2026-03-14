@@ -32,8 +32,8 @@ pub fn search_product_names(query: String, db: State<'_, Database>) -> Result<Ve
     let names: Vec<String> = stmt
         .query_map([&pattern], |row| row.get(0))
         .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| e.to_string())?;
 
     Ok(names)
 }
@@ -89,8 +89,8 @@ pub fn get_price_history(
             })
         })
         .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| e.to_string())?;
 
     Ok(points)
 }

@@ -17,9 +17,13 @@ const TIMEOUT_MS = 120_000; // 120 seconds / 120 Sekunden
 export function ScanProgress({ imagePath, onComplete }: ScanProgressProps) {
   const { analyzing, tokens, result, error, startAnalysis, reset } = useAnalyze();
   const [timedOut, setTimedOut] = useState(false);
-  const tokenEndRef = useRef<HTMLDivElement>(null);
+  const tokenEndRef = useRef<HTMLSpanElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasStarted = useRef(false);
+  // Ref to capture latest onComplete, avoids effect re-runs from inline arrows
+  // Ref fuer aktuellste onComplete, verhindert Effect-Neuausfuehrungen bei Inline-Arrows
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   // Start analysis on mount / Analyse beim Mounten starten
   useEffect(() => {
@@ -43,9 +47,9 @@ export function ScanProgress({ imagePath, onComplete }: ScanProgressProps) {
   useEffect(() => {
     if (result) {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      onComplete(result);
+      onCompleteRef.current(result);
     }
-  }, [result, onComplete]);
+  }, [result]);
 
   // Auto-scroll token output / Token-Ausgabe automatisch scrollen
   useEffect(() => {
@@ -54,6 +58,8 @@ export function ScanProgress({ imagePath, onComplete }: ScanProgressProps) {
 
   // Retry analysis / Analyse wiederholen
   const handleRetry = () => {
+    // Clear previous timeout to prevent race condition / Vorherigen Timeout loeschen um Race Condition zu verhindern
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setTimedOut(false);
     reset();
     hasStarted.current = false;
@@ -123,7 +129,7 @@ export function ScanProgress({ imagePath, onComplete }: ScanProgressProps) {
                   {analyzing && (
                     <span className="inline-block animate-pulse text-primary">|</span>
                   )}
-                  <div ref={tokenEndRef} />
+                  <span ref={tokenEndRef} />
                 </pre>
               ) : (
                 !hasError && (

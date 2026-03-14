@@ -1,5 +1,5 @@
 // Collapsible sidebar navigation / Einklappbare Seitenleisten-Navigation
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { ScanLine, ClipboardList, TrendingUp, LayoutDashboard, Settings, PanelLeftClose, PanelLeft } from "lucide-react";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -18,11 +18,21 @@ export function Sidebar() {
   const location = useLocation();
   const theme = useSettingsStore((s) => s.theme);
 
+  // Reactive system theme detection / Reaktive System-Theme-Erkennung
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+
+  useEffect(() => {
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+
   // Determine effective dark mode for logo selection
-  // Effektiven Dark Mode für Logo-Auswahl bestimmen
-  const isDark =
-    theme === "dark" ||
-    (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  // Effektiven Dark Mode fuer Logo-Auswahl bestimmen
+  const isDark = theme === "dark" || (theme === "system" && systemDark);
 
   return (
     <aside

@@ -19,7 +19,11 @@ impl Database {
     /// Oeffnet (oder erstellt) die SQLite-Datenbank und fuehrt Migrationen + Seeding aus.
     pub fn new(app_dir: PathBuf) -> Result<Self, rusqlite::Error> {
         let db_dir = app_dir.join("data").join("db");
-        std::fs::create_dir_all(&db_dir).expect("Failed to create db directory");
+        // Create DB directory if missing / DB-Verzeichnis erstellen falls nicht vorhanden
+        std::fs::create_dir_all(&db_dir)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(
+                format!("Failed to create db directory / DB-Verzeichnis konnte nicht erstellt werden: {}", e),
+            ))?;
         let db_path = db_dir.join("kassenzettel.db");
         let conn = Connection::open(&db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;

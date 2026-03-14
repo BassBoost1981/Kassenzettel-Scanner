@@ -75,17 +75,19 @@ struct SseDeltaContent {
 
 /// Get app directory (portable USB deployment)
 /// App-Verzeichnis ermitteln (portable USB-Installation)
-fn get_app_dir() -> PathBuf {
-    std::env::current_exe()
-        .expect("Failed to get exe path / Exe-Pfad konnte nicht ermittelt werden")
-        .parent()
-        .expect("Failed to get exe dir / Exe-Verzeichnis konnte nicht ermittelt werden")
-        .to_path_buf()
+fn get_app_dir() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| {
+        format!("Failed to get exe path / Exe-Pfad konnte nicht ermittelt werden: {}", e)
+    })?;
+    let dir = exe.parent().ok_or_else(|| {
+        "Failed to get exe dir / Exe-Verzeichnis konnte nicht ermittelt werden".to_string()
+    })?;
+    Ok(dir.to_path_buf())
 }
 
 /// Ensure images directory exists / Sicherstellen dass Bilderverzeichnis existiert
 fn ensure_images_dir() -> Result<PathBuf, String> {
-    let images_dir = get_app_dir().join("data").join("images");
+    let images_dir = get_app_dir()?.join("data").join("images");
     std::fs::create_dir_all(&images_dir).map_err(|e| {
         format!(
             "Failed to create images dir / Bilderverzeichnis konnte nicht erstellt werden: {}",
@@ -238,6 +240,9 @@ pub async fn analyze_receipt(
     let mut stream = response.bytes_stream();
 
     let mut buffer = String::new();
+    // Flag to break outer loop when [DONE] is received
+    // Flag um aeussere Schleife zu beenden wenn [DONE] empfangen wird
+    let mut done = false;
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("Stream error / Stream-Fehler: {}", e))?;
@@ -254,6 +259,7 @@ pub async fn analyze_receipt(
             }
 
             if line == "data: [DONE]" {
+                done = true;
                 break;
             }
 
@@ -267,6 +273,11 @@ pub async fn analyze_receipt(
                     }
                 }
             }
+        }
+
+        // Exit outer loop when stream is done / Aeussere Schleife beenden wenn Stream fertig
+        if done {
+            break;
         }
     }
 

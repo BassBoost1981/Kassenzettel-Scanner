@@ -56,24 +56,24 @@ impl SidecarState {
 
 /// Get the directory of the running executable (portable path).
 /// Gibt das Verzeichnis der laufenden EXE zurueck (portabler Pfad).
-fn get_app_dir() -> PathBuf {
-    std::env::current_exe()
-        .expect("Failed to get exe path / Exe-Pfad konnte nicht ermittelt werden")
-        .parent()
-        .expect("Failed to get exe dir / Exe-Verzeichnis konnte nicht ermittelt werden")
-        .to_path_buf()
+fn get_app_dir() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path / Exe-Pfad konnte nicht ermittelt werden: {e}"))?;
+    exe.parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "Failed to get exe dir / Exe-Verzeichnis konnte nicht ermittelt werden".to_string())
 }
 
 /// Get the model storage directory.
 /// Gibt das Modell-Speicherverzeichnis zurueck.
-fn get_model_dir() -> PathBuf {
-    get_app_dir().join("data").join("models")
+fn get_model_dir() -> Result<PathBuf, String> {
+    Ok(get_app_dir()?.join("data").join("models"))
 }
 
 /// Get the llama binary directory (contains llama-server.exe + DLLs).
 /// Gibt das llama-Binary-Verzeichnis zurueck (enthält llama-server.exe + DLLs).
-fn get_llama_dir() -> PathBuf {
-    get_app_dir().join("llama")
+fn get_llama_dir() -> Result<PathBuf, String> {
+    Ok(get_app_dir()?.join("llama"))
 }
 
 /// Default model filename / Standard-Modelldateiname
@@ -84,12 +84,12 @@ const MMPROJ_FILENAME: &str = "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf";
 const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf";
 const MMPROJ_DOWNLOAD_URL: &str = "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf";
 
-fn default_model_path() -> PathBuf {
-    get_model_dir().join(MODEL_FILENAME)
+fn default_model_path() -> Result<PathBuf, String> {
+    Ok(get_model_dir()?.join(MODEL_FILENAME))
 }
 
-fn default_mmproj_path() -> PathBuf {
-    get_model_dir().join(MMPROJ_FILENAME)
+fn default_mmproj_path() -> Result<PathBuf, String> {
+    Ok(get_model_dir()?.join(MMPROJ_FILENAME))
 }
 
 fn model_files_exist(model_path: &PathBuf, mmproj_path: &PathBuf) -> bool {
@@ -103,15 +103,15 @@ fn model_files_exist(model_path: &PathBuf, mmproj_path: &PathBuf) -> bool {
 /// Return the current sidecar status.
 /// Gibt den aktuellen Sidecar-Status zurueck.
 #[tauri::command]
-pub fn get_sidecar_status(state: State<'_, SidecarState>) -> SidecarStatus {
-    state.status.lock().unwrap().clone()
+pub fn get_sidecar_status(state: State<'_, SidecarState>) -> Result<SidecarStatus, String> {
+    Ok(state.status.lock().map_err(|e| e.to_string())?.clone())
 }
 
 /// Check whether the model file exists on disk.
 /// Prueft, ob die Modelldatei auf der Festplatte existiert.
 #[tauri::command]
-pub fn check_model_exists() -> bool {
-    model_files_exist(&default_model_path(), &default_mmproj_path())
+pub fn check_model_exists() -> Result<bool, String> {
+    Ok(model_files_exist(&default_model_path()?, &default_mmproj_path()?))
 }
 
 /// Start the llama-server sidecar process.
@@ -121,15 +121,25 @@ pub async fn start_llama_server(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<(), String> {
+    // Bug 1 fix: Stop any already running process before starting a new one
+    // Bug 1 Fix: Bereits laufenden Prozess stoppen bevor ein neuer gestartet wird
+    {
+        let mut child_guard = state.child.lock().map_err(|e| e.to_string())?;
+        if let Some(mut old_child) = child_guard.take() {
+            let _ = old_child.kill();
+            let _ = old_child.wait();
+        }
+    }
+
     // Determine model path / Modellpfad ermitteln
     let model_path = {
         let mp = state.model_path.lock().map_err(|e| e.to_string())?;
         match mp.clone() {
             Some(p) => PathBuf::from(p),
-            None => default_model_path(),
+            None => default_model_path()?,
         }
     };
-    let mmproj_path = default_mmproj_path();
+    let mmproj_path = default_mmproj_path()?;
 
     if !model_files_exist(&model_path, &mmproj_path) {
         let mut s = state.status.lock().map_err(|e| e.to_string())?;
@@ -165,7 +175,7 @@ pub async fn start_llama_server(
 
     // Spawn llama-server as a regular process from the llama/ directory
     // llama-server als normalen Prozess aus dem llama/-Verzeichnis starten
-    let llama_dir = get_llama_dir();
+    let llama_dir = get_llama_dir()?;
     let llama_exe = llama_dir.join("llama-server.exe");
 
     if !llama_exe.exists() {
@@ -237,6 +247,35 @@ pub async fn start_llama_server(
             );
         }
 
+        // Bug 5 fix: Check if child process crashed during health poll
+        // Bug 5 Fix: Pruefen ob der Kind-Prozess waehrend der Health-Abfrage abgestuerzt ist
+        {
+            let mut child_guard = state.child.lock().map_err(|e| e.to_string())?;
+            if let Some(ref mut child) = *child_guard {
+                match child.try_wait() {
+                    Ok(Some(exit_status)) => {
+                        // Process exited prematurely / Prozess hat sich vorzeitig beendet
+                        child_guard.take(); // Clean up handle / Handle aufraeumen
+                        let mut s = state.status.lock().map_err(|e| e.to_string())?;
+                        *s = SidecarStatus::Error(format!(
+                            "llama-server exited with {exit_status} / llama-server beendet mit {exit_status}"
+                        ));
+                        return Err(format!(
+                            "llama-server process exited prematurely with {exit_status} / llama-server Prozess vorzeitig beendet mit {exit_status}"
+                        ));
+                    }
+                    Ok(None) => { /* Still running / Laeuft noch */ }
+                    Err(e) => {
+                        let mut s = state.status.lock().map_err(|e| e.to_string())?;
+                        *s = SidecarStatus::Error(format!(
+                            "Failed to check process status / Prozessstatus konnte nicht geprueft werden: {e}"
+                        ));
+                        return Err(format!("Failed to check child process status: {e}"));
+                    }
+                }
+            }
+        }
+
         match client.get(health_url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 let mut s = state.status.lock().map_err(|e| e.to_string())?;
@@ -264,7 +303,7 @@ pub fn stop_llama_server(state: State<'_, SidecarState>) -> Result<(), String> {
     #[cfg(windows)]
     {
         let _ = std::process::Command::new("taskkill")
-            .args(["//f", "//im", "llama-server.exe"])
+            .args(["/F", "/IM", "llama-server.exe"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
@@ -278,7 +317,7 @@ pub fn stop_llama_server(state: State<'_, SidecarState>) -> Result<(), String> {
 /// Laedt das Standard-Modell von Hugging Face mit Fortschritts-Events herunter.
 #[tauri::command]
 pub async fn download_model(app: AppHandle, state: State<'_, SidecarState>) -> Result<(), String> {
-    let model_dir = get_model_dir();
+    let model_dir = get_model_dir()?;
     std::fs::create_dir_all(&model_dir).map_err(|e| {
         format!("Failed to create model dir / Modellverzeichnis konnte nicht erstellt werden: {e}")
     })?;
@@ -288,7 +327,7 @@ pub async fn download_model(app: AppHandle, state: State<'_, SidecarState>) -> R
         &app,
         &client,
         MODEL_DOWNLOAD_URL,
-        &default_model_path(),
+        &default_model_path()?,
         "Basis-Modell",
     )
     .await?;
@@ -296,7 +335,7 @@ pub async fn download_model(app: AppHandle, state: State<'_, SidecarState>) -> R
         &app,
         &client,
         MMPROJ_DOWNLOAD_URL,
-        &default_mmproj_path(),
+        &default_mmproj_path()?,
         "Vision-Projektor",
     )
     .await?;
@@ -305,7 +344,7 @@ pub async fn download_model(app: AppHandle, state: State<'_, SidecarState>) -> R
     {
         let mut mp = state.model_path.lock().map_err(|e| e.to_string())?;
         *mp = Some(
-            default_model_path()
+            default_model_path()?
                 .to_str()
                 .unwrap_or_default()
                 .to_string(),
@@ -431,7 +470,7 @@ pub async fn select_model_file(
         .into_path()
         .map_err(|e| format!("Invalid file path / Ungueltiger Dateipfad: {e}"))?;
 
-    let model_dir = get_model_dir();
+    let model_dir = get_model_dir()?;
     std::fs::create_dir_all(&model_dir).map_err(|e| {
         format!("Failed to create model dir / Modellverzeichnis konnte nicht erstellt werden: {e}")
     })?;
@@ -450,15 +489,15 @@ pub async fn select_model_file(
     let (selected_dest, sibling_source, sibling_dest) =
         if file_name.eq_ignore_ascii_case(MMPROJ_FILENAME) {
             (
-                default_mmproj_path(),
+                default_mmproj_path()?,
                 source_dir.join(MODEL_FILENAME),
-                default_model_path(),
+                default_model_path()?,
             )
         } else {
             (
-                default_model_path(),
+                default_model_path()?,
                 source_dir.join(MMPROJ_FILENAME),
-                default_mmproj_path(),
+                default_mmproj_path()?,
             )
         };
 
@@ -473,14 +512,14 @@ pub async fn select_model_file(
         })?;
     }
 
-    if !model_files_exist(&default_model_path(), &default_mmproj_path()) {
+    if !model_files_exist(&default_model_path()?, &default_mmproj_path()?) {
         return Err(
             "Both model files are required. Please choose a file from a folder that contains the base model and the matching mmproj file / Es werden beide Modelldateien benötigt. Bitte wähle eine Datei aus einem Ordner, der das Basismodell und die passende mmproj-Datei enthält."
                 .into(),
         );
     }
 
-    let dest_str = default_model_path()
+    let dest_str = default_model_path()?
         .to_str()
         .ok_or("Invalid destination path / Ungueltiger Zielpfad")?
         .to_string();

@@ -24,7 +24,12 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:8190 https://huggingface.co",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "$APPDATA/**",
+          "$RESOURCE/**",
+          "$TEMP/**",
+          "$HOME/**"
+        ]
       }
     }
   },

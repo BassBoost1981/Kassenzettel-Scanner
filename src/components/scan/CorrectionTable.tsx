@@ -1,5 +1,5 @@
 // Correction table for reviewed receipt data / Korrektur-Tabelle fuer ueberprueften Kassenzettel
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo, memo } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -64,6 +64,77 @@ function categoryLookupKey(value: string | null | undefined) {
   return normalizeCategoryName(value).toLocaleLowerCase("de-DE");
 }
 
+// Inline editable cell — defined outside to prevent re-creation on each render
+// Inline-bearbeitbare Zelle — ausserhalb definiert um Neuerstellung bei jedem Render zu verhindern
+const EditableCell = memo(function EditableCell({
+  rowId,
+  col,
+  value,
+  type = "text",
+  className: cellClassName,
+  align = "left",
+  editingCell,
+  setEditingCell,
+  updateItem,
+}: {
+  rowId: number;
+  col: string;
+  value: string | number;
+  type?: string;
+  className?: string;
+  align?: "left" | "right";
+  editingCell: { row: number; col: string } | null;
+  setEditingCell: (cell: { row: number; col: string } | null) => void;
+  updateItem: (id: number, field: keyof AnalyzedItem, value: string | number) => void;
+}) {
+  const isEditing =
+    editingCell?.row === rowId && editingCell?.col === col;
+
+  if (isEditing) {
+    return (
+      <Input
+        autoFocus
+        type={type}
+        defaultValue={value}
+        className={cn("h-7 text-sm", type === "number" && "text-right", cellClassName)}
+        step={type === "number" ? "0.01" : undefined}
+        onBlur={(e) => {
+          const newVal =
+            type === "number"
+              ? parseFloat(e.target.value) || 0
+              : e.target.value;
+          updateItem(rowId, col as keyof AnalyzedItem, newVal);
+          setEditingCell(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            (e.target as HTMLInputElement).blur();
+          }
+          if (e.key === "Escape") {
+            setEditingCell(null);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className={cn(
+        "group flex items-center gap-1 cursor-pointer rounded px-1 py-0.5 hover:bg-muted/50",
+        align === "right" && "justify-end text-right",
+        cellClassName
+      )}
+      onClick={() => setEditingCell({ row: rowId, col })}
+    >
+      {type === "number"
+        ? (value as number).toFixed(2)
+        : value || "\u00A0"}
+      <Pencil className="size-3 opacity-0 group-hover:opacity-50 shrink-0" />
+    </span>
+  );
+});
+
 export function CorrectionTable({
   imagePath,
   result,
@@ -93,14 +164,19 @@ export function CorrectionTable({
   // Price ranges for known products / Preisbereiche fuer bekannte Produkte
   const [priceRanges, setPriceRanges] = useState<Record<string, [number, number]>>({});
 
+  // Stable key derived from unique item names only — prevents infinite loop
+  // Stabiler Schluessel aus eindeutigen Artikelnamen — verhindert Endlosschleife
+  const itemNamesKey = useMemo(
+    () => JSON.stringify([...new Set(items.map((item) => item.name.trim()).filter(Boolean))].sort()),
+    [items]
+  );
+
   // Load price ranges for all items / Preisbereiche fuer alle Artikel laden
   useEffect(() => {
     let ignore = false;
 
     const loadRanges = async () => {
-      const uniqueNames = Array.from(
-        new Set(items.map((item) => item.name.trim()).filter(Boolean))
-      );
+      const uniqueNames: string[] = JSON.parse(itemNamesKey);
 
       if (uniqueNames.length === 0) {
         setPriceRanges({});
@@ -131,7 +207,7 @@ export function CorrectionTable({
     return () => {
       ignore = true;
     };
-  }, [items]);
+  }, [itemNamesKey]);
 
   const imageSrc = convertFileSrc(imagePath);
 
@@ -274,70 +350,6 @@ export function CorrectionTable({
     } finally {
       setSaving(false);
     }
-  };
-
-  // Inline editable cell / Inline-bearbeitbare Zelle
-  const EditableCell = ({
-    rowId,
-    col,
-    value,
-    type = "text",
-    className: cellClassName,
-    align = "left",
-  }: {
-    rowId: number;
-    col: string;
-    value: string | number;
-    type?: string;
-    className?: string;
-    align?: "left" | "right";
-  }) => {
-    const isEditing =
-      editingCell?.row === rowId && editingCell?.col === col;
-
-    if (isEditing) {
-      return (
-        <Input
-          autoFocus
-          type={type}
-          defaultValue={value}
-          className={cn("h-7 text-sm", type === "number" && "text-right", cellClassName)}
-          step={type === "number" ? "0.01" : undefined}
-          onBlur={(e) => {
-            const newVal =
-              type === "number"
-                ? parseFloat(e.target.value) || 0
-                : e.target.value;
-            updateItem(rowId, col as keyof AnalyzedItem, newVal);
-            setEditingCell(null);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              (e.target as HTMLInputElement).blur();
-            }
-            if (e.key === "Escape") {
-              setEditingCell(null);
-            }
-          }}
-        />
-      );
-    }
-
-    return (
-      <span
-        className={cn(
-          "group flex items-center gap-1 cursor-pointer rounded px-1 py-0.5 hover:bg-muted/50",
-          align === "right" && "justify-end text-right",
-          cellClassName
-        )}
-        onClick={() => setEditingCell({ row: rowId, col })}
-      >
-        {type === "number"
-          ? (value as number).toFixed(2)
-          : value || "\u00A0"}
-        <Pencil className="size-3 opacity-0 group-hover:opacity-50 shrink-0" />
-      </span>
-    );
   };
 
   return (
@@ -497,6 +509,9 @@ export function CorrectionTable({
                           rowId={item._id}
                           col="name"
                           value={item.name}
+                          editingCell={editingCell}
+                          setEditingCell={setEditingCell}
+                          updateItem={updateItem}
                         />
                       </TableCell>
                       <TableCell>
@@ -504,6 +519,9 @@ export function CorrectionTable({
                           rowId={item._id}
                           col="artikelnummer"
                           value={item.artikelnummer || ""}
+                          editingCell={editingCell}
+                          setEditingCell={setEditingCell}
+                          updateItem={updateItem}
                         />
                       </TableCell>
                       <TableCell>
@@ -513,6 +531,9 @@ export function CorrectionTable({
                           value={item.menge}
                           type="number"
                           align="right"
+                          editingCell={editingCell}
+                          setEditingCell={setEditingCell}
+                          updateItem={updateItem}
                         />
                       </TableCell>
                       <TableCell>
@@ -522,6 +543,9 @@ export function CorrectionTable({
                           value={item.einzelpreis}
                           type="number"
                           align="right"
+                          editingCell={editingCell}
+                          setEditingCell={setEditingCell}
+                          updateItem={updateItem}
                         />
                       </TableCell>
                       <TableCell>
@@ -531,6 +555,9 @@ export function CorrectionTable({
                           value={item.gesamtpreis}
                           type="number"
                           align="right"
+                          editingCell={editingCell}
+                          setEditingCell={setEditingCell}
+                          updateItem={updateItem}
                         />
                       </TableCell>
                       {/* Price range / Preisbereich */}
@@ -599,7 +626,7 @@ export function CorrectionTable({
                 </TableBody>
                 <TableFooter>
                   <TableRow>
-                    <TableCell colSpan={8} className="p-0">
+                    <TableCell colSpan={9} className="p-0">
                       <Button
                         variant="ghost"
                         size="sm"

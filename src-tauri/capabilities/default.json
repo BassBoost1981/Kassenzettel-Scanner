@@ -18,7 +18,8 @@
         { "path": "$APPDATA/**" },
         { "path": "$RESOURCE/**" },
         { "path": "$TEMP/**" },
-        { "path": "$HOME/**" }
+        { "path": "$HOME/**" },
+        { "path": "$EXE/../**" }
       ]
     }
   ]

@@ -28,7 +28,8 @@
           "$APPDATA/**",
           "$RESOURCE/**",
           "$TEMP/**",
-          "$HOME/**"
+          "$HOME/**",
+          "$EXE/../**"
         ]
       }
     }

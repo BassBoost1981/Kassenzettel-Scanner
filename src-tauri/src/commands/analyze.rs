@@ -13,7 +13,17 @@ use uuid::Uuid;
 
 use crate::db::Database;
 
-const OCR_PROMPT: &str = r#"Du analysierst einen deutschen Kassenzettel.
+/// Build the OCR prompt with dynamic categories from the database.
+/// OCR-Prompt mit dynamischen Kategorien aus der Datenbank erstellen.
+fn build_ocr_prompt(categories: &[String]) -> String {
+    let category_list = if categories.is_empty() {
+        "Obst/Gemüse, Milchprodukte, Fleisch/Wurst, Backwaren, Getränke, Tiefkühl, Drogerie, Sonstiges".to_string()
+    } else {
+        categories.join(", ")
+    };
+
+    format!(
+        r#"Du analysierst einen deutschen Kassenzettel.
 Extrahiere alle Informationen und antworte NUR mit einem validen JSON-Objekt. Keine Erklärungen, kein Markdown.
 
 Regeln:
@@ -21,11 +31,14 @@ Regeln:
 - Datum im Format YYYY-MM-DD
 - Menge als Zahl (2, nicht "2x")
 - Rabatte und Pfand separat ausweisen
-- Kategorie aus: Obst/Gemüse, Milchprodukte, Fleisch/Wurst, Backwaren, Getränke, Tiefkühl, Drogerie, Sonstiges
+- Kategorie aus: {}
 - confidence: 1.0 wenn sicher, 0.5 wenn unsicher, 0.0 wenn geraten
 - Artikelnummer (EAN, PZN oder interne Nummer) wenn vorhanden extrahieren, sonst null
 
-Schema: { "markt": "...", "datum": "YYYY-MM-DD", "uhrzeit": "HH:MM", "artikel": [{"name": "...", "artikelnummer": "06197481", "menge": 1, "einzelpreis": 0.00, "gesamtpreis": 0.00, "rabatt": 0.00, "pfand": 0.00, "kategorie": "...", "confidence": 1.0}], "gesamtbetrag": 0.00, "rabatte_gesamt": 0.00, "pfand_gesamt": 0.00, "zahlungsart": "..." }"#;
+Schema: {{ "markt": "...", "datum": "YYYY-MM-DD", "uhrzeit": "HH:MM", "artikel": [{{"name": "...", "artikelnummer": "06197481", "menge": 1, "einzelpreis": 0.00, "gesamtpreis": 0.00, "rabatt": 0.00, "pfand": 0.00, "kategorie": "...", "confidence": 1.0}}], "gesamtbetrag": 0.00, "rabatte_gesamt": 0.00, "pfand_gesamt": 0.00, "zahlungsart": "..." }}"#,
+        category_list
+    )
+}
 
 /// Result of AI receipt analysis / Ergebnis der KI-Kassenzettel-Analyse
 #[derive(Serialize, Deserialize, Clone)]
@@ -194,7 +207,22 @@ pub async fn analyze_receipt(
         saved_image_path = Some(relative_path);
     }
 
-    // 5. POST to llama-server / POST an llama-server senden
+    // 5. Load categories from DB for dynamic prompt
+    // Kategorien aus DB laden fuer dynamischen Prompt
+    let category_names: Vec<String> = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT name FROM categories ORDER BY name")
+            .map_err(|e| e.to_string())?;
+        let names: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        names
+    };
+    let ocr_prompt = build_ocr_prompt(&category_names);
+
+    // 6. POST to llama-server / POST an llama-server senden
     let client = reqwest::Client::new();
     let request_body = serde_json::json!({
         "model": "qwen2.5-vl",
@@ -213,7 +241,7 @@ pub async fn analyze_receipt(
                     },
                     {
                         "type": "text",
-                        "text": OCR_PROMPT
+                        "text": ocr_prompt
                     }
                 ]
             }

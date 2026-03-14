@@ -37,7 +37,7 @@ import { exportReceiptsCsv } from "@/lib/tauri-commands";
 
 export function ReceiptList() {
   const navigate = useNavigate();
-  const { receipts, loading, setFilter, filter, search, fetchReceipts, removeReceipt } = useReceipts();
+  const { receipts, loading, setFilter, filter, search, removeReceipt } = useReceipts();
   const { stores } = useStores();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -78,7 +78,7 @@ export function ReceiptList() {
     setFilter({});
   };
 
-  const handleStoreChange = (value: string) => {
+  const handleStoreChange = (value: string | null) => {
     const id = value === "__all__" ? undefined : Number(value);
     setStoreFilter(id);
     setFilter({

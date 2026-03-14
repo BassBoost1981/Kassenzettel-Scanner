@@ -33,7 +33,7 @@ import {
   ArrowLeftIcon,
   Trash2Icon,
   ImageIcon,
-  StoreIcon,
+
   CalendarIcon,
   ClockIcon,
   CreditCardIcon,

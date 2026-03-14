@@ -53,6 +53,9 @@ pub fn run() {
             sidecar::stop_llama_server,
             sidecar::download_model,
             sidecar::select_model_file,
+            commands::analyze::analyze_receipt,
+            commands::scanner::is_scanner_available,
+            commands::scanner::scan_document,
         ])
         .on_window_event(|window, event| {
             // Stop sidecar on window close / Sidecar beim Fensterschliessen stoppen

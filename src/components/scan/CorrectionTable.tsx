@@ -435,11 +435,6 @@ export function CorrectionTable({
                     </Button>
                     )}
                 </div>
-                <datalist id="category-suggestions">
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.name} />
-                  ))}
-                </datalist>
               </div>
 
               {/* Date / Datum */}
@@ -578,30 +573,43 @@ export function CorrectionTable({
                         )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Input
-                            value={item.kategorie ?? ""}
-                            onChange={(e) =>
-                              updateItem(item._id, "kategorie", e.target.value)
-                            }
-                            list="category-suggestions"
-                            placeholder="Kategorie"
-                            className="h-7"
-                          />
-                          {normalizeCategoryName(item.kategorie) &&
-                            !categoryExists(item.kategorie ?? "") && (
-                              <Button
-                                variant="outline"
-                                size="icon-xs"
-                                className="shrink-0 text-green-600 border-green-600 hover:bg-green-600/10"
-                                disabled={categoriesLoading}
-                                onClick={() => void handleQuickAddCategory(item.kategorie ?? "")}
-                                title="Kategorie zur Liste hinzufügen"
-                              >
-                                <PlusCircle className="size-3.5" />
-                              </Button>
+                        <select
+                          value={item.kategorie ?? ""}
+                          onChange={(e) =>
+                            updateItem(item._id, "kategorie", e.target.value)
+                          }
+                          className="h-7 w-full rounded-md border border-input bg-background px-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                        >
+                          <option value="">— Keine —</option>
+                          {categories.map((cat) => (
+                            <option key={cat.id} value={cat.name}>
+                              {cat.name}
+                            </option>
+                          ))}
+                          {/* Show current value if not in categories list */}
+                          {/* Aktuellen Wert anzeigen falls nicht in Kategorie-Liste */}
+                          {item.kategorie &&
+                            !categoryExists(item.kategorie) && (
+                              <option value={item.kategorie}>
+                                {item.kategorie} (neu)
+                              </option>
                             )}
-                        </div>
+                        </select>
+                        {/* Quick-add button for unknown categories */}
+                        {/* Schnell-Hinzufuegen-Button fuer unbekannte Kategorien */}
+                        {normalizeCategoryName(item.kategorie) &&
+                          !categoryExists(item.kategorie ?? "") && (
+                            <Button
+                              variant="outline"
+                              size="icon-xs"
+                              className="mt-1 shrink-0 text-green-600 border-green-600 hover:bg-green-600/10"
+                              disabled={categoriesLoading}
+                              onClick={() => void handleQuickAddCategory(item.kategorie ?? "")}
+                              title="Kategorie zur Liste hinzufügen"
+                            >
+                              <PlusCircle className="size-3.5" />
+                            </Button>
+                          )}
                       </TableCell>
                       <TableCell className="text-center">
                         {item.confidence < 0.7 && (

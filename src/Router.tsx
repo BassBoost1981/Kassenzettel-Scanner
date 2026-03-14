@@ -1,10 +1,6 @@
 // App router with placeholder pages / App-Router mit Platzhalter-Seiten
 import { Routes, Route, Navigate } from "react-router-dom";
-
-// Placeholder page components / Platzhalter-Seitenkomponenten
-function ScanPage() {
-  return <div className="text-2xl font-semibold">Kassenzettel scannen</div>;
-}
+import { ScanPage } from "./components/scan/ScanPage";
 
 function ReceiptsPage() {
   return <div className="text-2xl font-semibold">Bons</div>;

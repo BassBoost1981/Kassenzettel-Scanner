@@ -71,3 +71,7 @@ export const downloadModel = () =>
 
 export const selectModelFile = () =>
   invoke<string>("select_model_file");
+
+// Export / Export
+export const exportReceiptsCsv = (path: string, filter?: ReceiptFilter) =>
+  invoke<void>("export_receipts_csv", { path, filter: filter ?? null });

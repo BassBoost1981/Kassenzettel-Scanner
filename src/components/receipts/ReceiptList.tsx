@@ -30,7 +30,10 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { ReceiptTextIcon, Trash2Icon, SearchIcon, XIcon } from "lucide-react";
+import { ReceiptTextIcon, Trash2Icon, SearchIcon, XIcon, DownloadIcon } from "lucide-react";
+import { toast } from "sonner";
+import { save } from "@tauri-apps/plugin-dialog";
+import { exportReceiptsCsv } from "@/lib/tauri-commands";
 
 export function ReceiptList() {
   const navigate = useNavigate();
@@ -105,9 +108,37 @@ export function ReceiptList() {
 
   const handleDelete = async () => {
     if (deleteId !== null) {
-      await removeReceipt(deleteId);
+      try {
+        await removeReceipt(deleteId);
+        toast.success("Kassenzettel gelöscht");
+      } catch (err) {
+        toast.error(`Fehler: ${err}`);
+      }
       setDeleteOpen(false);
       setDeleteId(null);
+    }
+  };
+
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    try {
+      setExporting(true);
+      const filePath = await save({
+        defaultPath: "kassenzettel.csv",
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!filePath) return; // User cancelled / Benutzer hat abgebrochen
+      await exportReceiptsCsv(filePath, {
+        store_id: storeFilter,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      });
+      toast.success("CSV exportiert");
+    } catch (err) {
+      toast.error(`Fehler: ${err}`);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -176,6 +207,16 @@ export function ReceiptList() {
             Filter zurücksetzen
           </Button>
         )}
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExport}
+          disabled={exporting || (sortedReceipts.length === 0 && !loading)}
+        >
+          <DownloadIcon className="size-4 mr-1" />
+          {exporting ? "Exportiert..." : "Als CSV exportieren"}
+        </Button>
       </div>
 
       {/* Loading state */}

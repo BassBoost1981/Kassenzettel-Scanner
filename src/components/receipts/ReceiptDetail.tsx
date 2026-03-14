@@ -38,6 +38,7 @@ import {
   ClockIcon,
   CreditCardIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 
 export function ReceiptDetail() {
   const navigate = useNavigate();
@@ -56,8 +57,13 @@ export function ReceiptDetail() {
 
   const handleDelete = async () => {
     if (currentDetail) {
-      await removeReceipt(currentDetail.id);
-      navigate("/receipts");
+      try {
+        await removeReceipt(currentDetail.id);
+        toast.success("Kassenzettel gelöscht");
+        navigate("/receipts");
+      } catch (err) {
+        toast.error(`Fehler: ${err}`);
+      }
     }
   };
 

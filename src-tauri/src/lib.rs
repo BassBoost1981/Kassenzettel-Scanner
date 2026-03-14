@@ -56,6 +56,7 @@ pub fn run() {
             commands::analyze::analyze_receipt,
             commands::scanner::is_scanner_available,
             commands::scanner::scan_document,
+            commands::export::export_receipts_csv,
         ])
         .on_window_event(|window, event| {
             // Stop sidecar on window close / Sidecar beim Fensterschliessen stoppen
